@@ -1,7 +1,7 @@
 # Load and dump a CAN database in SYM format.
 
 import logging
-from collections import OrderedDict
+from collections import OrderedDict as odict
 from pyparsing import Word
 from pyparsing import Literal
 from pyparsing import Keyword
@@ -17,12 +17,15 @@ from pyparsing import ZeroOrMore
 from pyparsing import OneOrMore
 from pyparsing import delimitedList
 from pyparsing import dblSlashComment
+from pyparsing import ParseException
+from pyparsing import ParseSyntaxException
 
 from ..signal import Signal
 from ..message import Message
-from ..database import Database
+from ..internal_database import InternalDatabase
 
 from .utils import num
+from ...errors import ParseError
 
 
 LOGGER = logging.getLogger(__name__)
@@ -155,8 +158,7 @@ def _load_enums(tokens):
     enums = {}
 
     for name, values in section:
-        enums[name] = OrderedDict(
-            (num(v[0]), v[1]) for v in values)
+        enums[name] = odict((num(v[0]), v[1]) for v in values)
 
     return enums
 
@@ -166,7 +168,7 @@ def _load_signal(tokens, enums):
     name = tokens[0]
     is_signed = False
     is_float = False
-    byte_order = 'big_endian'
+    byte_order = 'little_endian'
     offset = 0
     factor = 1
     unit = None
@@ -195,7 +197,7 @@ def _load_signal(tokens, enums):
     # Byte order.
     try:
         if tokens[3][0] == '-m':
-            byte_order = 'little_endian'
+            byte_order = 'big_endian'
     except IndexError:
         pass
 
@@ -219,7 +221,7 @@ def _load_signal(tokens, enums):
     return Signal(name=name,
                   start=offset,
                   length=length,
-                  nodes=[],
+                  receivers=[],
                   byte_order=byte_order,
                   is_signed=is_signed,
                   scale=factor,
@@ -228,9 +230,7 @@ def _load_signal(tokens, enums):
                   maximum=maximum,
                   unit=unit,
                   choices=enum,
-                  comment=None,
                   is_multiplexer=False,
-                  multiplexer_id=None,
                   is_float=is_float)
 
 
@@ -245,13 +245,20 @@ def _load_signals(tokens, enums):
     return signals
 
 
-def _load_message_signal(tokens, signals, multiplexer_id):
+def _load_message_signal(tokens,
+                         signals,
+                         multiplexer_signal,
+                         multiplexer_ids):
     signal = signals[tokens[1]]
+    start = int(tokens[2])
+
+    if signal.byte_order == 'big_endian':
+        start = (8 * (start // 8) + (7 - (start % 8)))
 
     return Signal(name=signal.name,
-                  start=int(tokens[2]),
+                  start=start,
                   length=signal.length,
-                  nodes=signal.nodes,
+                  receivers=signal.receivers,
                   byte_order=signal.byte_order,
                   is_signed=signal.is_signed,
                   scale=signal.scale,
@@ -262,15 +269,20 @@ def _load_message_signal(tokens, signals, multiplexer_id):
                   choices=signal.choices,
                   comment=signal.comment,
                   is_multiplexer=signal.is_multiplexer,
-                  multiplexer_id=multiplexer_id,
+                  multiplexer_ids=multiplexer_ids,
+                  multiplexer_signal=multiplexer_signal,
                   is_float=signal.is_float)
 
 
 def _load_message_signals_inner(message_tokens,
                                 signals,
-                                multiplexer_id=None):
+                                multiplexer_signal=None,
+                                multiplexer_ids=None):
     return [
-        _load_message_signal(signal, signals, multiplexer_id)
+        _load_message_signal(signal,
+                             signals,
+                             multiplexer_signal,
+                             multiplexer_ids)
         for signal in message_tokens[7]
     ]
 
@@ -279,34 +291,28 @@ def _load_muxed_message_signals(message_tokens,
                                 message_section_tokens,
                                 signals):
     mux_tokens = message_tokens[3]
+    multiplexer_signal = mux_tokens[1]
     result = [
-        Signal(name=mux_tokens[1],
+        Signal(name=multiplexer_signal,
                start=int(mux_tokens[2]),
                length=int(mux_tokens[3]),
-               nodes=None,
-               byte_order='big_endian',
-               is_signed=False,
-               scale=None,
-               offset=None,
-               minimum=None,
-               maximum=None,
-               unit=None,
-               choices=None,
-               comment=None,
+               byte_order='little_endian',
                is_multiplexer=True)
     ]
 
-    multiplexer_id = int(mux_tokens[4])
+    multiplexer_ids = [int(mux_tokens[4])]
     result += _load_message_signals_inner(message_tokens,
                                           signals,
-                                          multiplexer_id)
+                                          multiplexer_signal,
+                                          multiplexer_ids)
 
     for tokens in message_section_tokens:
         if tokens[0] == message_tokens[0] and tokens != message_tokens:
-            multiplexer_id = int(tokens[3][4])
+            multiplexer_ids = [int(tokens[3][4])]
             result += _load_message_signals_inner(tokens,
                                                   signals,
-                                                  multiplexer_id)
+                                                  multiplexer_signal,
+                                                  multiplexer_ids)
 
     return result
 
@@ -331,7 +337,8 @@ def _load_message(frame_id,
                   is_extended_frame,
                   message_tokens,
                   message_section_tokens,
-                  signals):
+                  signals,
+                  strict):
     # Default values.
     name = message_tokens[0]
     length = int(message_tokens[2][1])
@@ -347,14 +354,15 @@ def _load_message(frame_id,
                    is_extended_frame=is_extended_frame,
                    name=name,
                    length=length,
-                   nodes=[],
+                   senders=[],
                    send_type=None,
                    cycle_time=cycle_time,
                    signals=_load_message_signals(message_tokens,
                                                  message_section_tokens,
                                                  signals),
                    comment=None,
-                   bus_name=None)
+                   bus_name=None,
+                   strict=strict)
 
 
 def _parse_message_frame_ids(message):
@@ -374,7 +382,7 @@ def _parse_message_frame_ids(message):
     return frame_ids, is_extended_frame(minimum)
 
 
-def _load_message_section(section_name, tokens, signals):
+def _load_message_section(section_name, tokens, signals, strict):
     def has_frame_id(message):
         return len(message[1]) > 0
 
@@ -392,16 +400,17 @@ def _load_message_section(section_name, tokens, signals):
                                     is_extended_frame,
                                     message_tokens,
                                     message_section_tokens,
-                                    signals)
+                                    signals,
+                                    strict)
             messages.append(message)
 
     return messages
 
 
-def _load_messages(tokens, signals):
-    messages = _load_message_section('{SEND}', tokens, signals)
-    messages += _load_message_section('{RECEIVE}', tokens, signals)
-    messages += _load_message_section('{SENDRECEIVE}', tokens, signals)
+def _load_messages(tokens, signals, strict):
+    messages = _load_message_section('{SEND}', tokens, signals, strict)
+    messages += _load_message_section('{RECEIVE}', tokens, signals, strict)
+    messages += _load_message_section('{SENDRECEIVE}', tokens, signals, strict)
 
     return messages
 
@@ -410,25 +419,33 @@ def _load_version(tokens):
     return tokens[0][1]
 
 
-def load_string(string):
+def load_string(string, strict=True):
     """Parse given string.
 
     """
 
     if not string.startswith('FormatVersion=6.0'):
-        raise ValueError('Only SYM version 6.0 is supported.')
+        raise ParseError('Only SYM version 6.0 is supported.')
 
     grammar = _create_grammar_6_0()
-    tokens = grammar.parseString(string)
+
+    try:
+        tokens = grammar.parseString(string)
+    except (ParseException, ParseSyntaxException) as e:
+        raise ParseError(
+            "Invalid SYM syntax at line {}, column {}: '{}': {}.".format(
+                e.lineno,
+                e.column,
+                e.markInputline(),
+                e.msg))
 
     version = _load_version(tokens)
     enums = _load_enums(tokens)
     signals = _load_signals(tokens, enums)
-    messages = _load_messages(tokens, signals)
+    messages = _load_messages(tokens, signals, strict)
 
-    return Database(messages,
-                    [],
-                    [],
-                    version,
-                    [],
-                    [])
+    return InternalDatabase(messages,
+                            [],
+                            [],
+                            version,
+                            [])

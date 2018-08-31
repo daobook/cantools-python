@@ -1,10 +1,18 @@
 #!/usr/bin/env python
 
-from setuptools import setup, find_packages
-import cantools
+from setuptools import setup
+from setuptools import find_packages
+import re
+
+
+def find_version():
+    return re.search(r"^__version__ = '(.*)'$",
+                     open('cantools/__init__.py', 'r').read(),
+                     re.MULTILINE).group(1)
+
 
 setup(name='cantools',
-      version=cantools.__version__,
+      version=find_version(),
       description='CAN BUS tools.',
       long_description=open('README.rst', 'r').read(),
       author='Erik Moqvist',
@@ -18,8 +26,12 @@ setup(name='cantools',
       keywords=['can', 'can bus', 'dbc', 'kcd', 'automotive'],
       url='https://github.com/eerimoq/cantools',
       packages=find_packages(exclude=['tests']),
-      install_requires=['bitstruct>=0.7.1',
-                        'pyparsing>=2.0.3'],
+      install_requires=[
+          'bitstruct>=3.7.0',
+          'pyparsing>=2.0.3',
+          'python-can>=2.1.0',
+          'textparser'
+      ],
       test_suite="tests",
       entry_points = {
           'console_scripts': ['cantools=cantools.__init__:_main']
