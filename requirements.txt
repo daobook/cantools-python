@@ -1,2 +1,7 @@
 bitstruct
 pyparsing
+codespell
+mock
+python-can
+textparser
+diskcache

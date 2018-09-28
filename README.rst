@@ -6,11 +6,17 @@ About
 
 CAN BUS tools.
 
-- `DBC`_ and `KCD`_ file mangling.
+- `DBC`_, `KCD`_, SYM and CDD file parsing.
 
 - CAN message encoding and decoding.
 
+- Simple and extended signal multiplexing.
+
+- Diagnostic DID encoding and decoding.
+
 - ``candump`` output decoder.
+
+- Node `tester`_.
 
 Project homepage: https://github.com/eerimoq/cantools
 
@@ -36,14 +42,14 @@ messages and signals.
 
    >>> import cantools
    >>> from pprint import pprint
-   >>> db = cantools.db.load_file('tests/files/motohawk.dbc')
+   >>> db = cantools.database.load_file('tests/files/motohawk.dbc')
    >>> db.messages
-   [message('ExampleMessage', 0x1f0, 8, 'Example message used as template in MotoHawk models.')]
+   [message('ExampleMessage', 0x1f0, False, 8, 'Example message used as template in MotoHawk models.')]
    >>> example_message = db.get_message_by_name('ExampleMessage')
    >>> pprint(example_message.signals)
-   [signal('Enable', 0, 1, 'big_endian', False, 1.0, 0, 0.0, 0.0, '-', False, None, {0: 'Disabled', 1: 'Enabled'}, None),
-    signal('AverageRadius', 1, 6, 'big_endian', False, 0.1, 0, 0.0, 5.0, 'm', False, None, None, ''),
-    signal('Temperature', 7, 12, 'big_endian', True, 0.01, 250, 229.53, 270.47, 'degK', False, None, None, None)]
+   [signal('Enable', 7, 1, 'big_endian', False, 1.0, 0, 0.0, 0.0, '-', False, None, {0: 'Disabled', 1: 'Enabled'}, None),
+    signal('AverageRadius', 6, 6, 'big_endian', False, 0.1, 0, 0.0, 5.0, 'm', False, None, None, ''),
+    signal('Temperature', 0, 12, 'big_endian', True, 0.01, 250, 229.53, 270.47, 'degK', False, None, None, None)]
 
 The example continues `encoding`_ a message and sending it on a CAN
 bus using the `python-can`_ package.
@@ -69,24 +75,111 @@ The last part of the example receives and `decodes`_ a CAN message.
    >>> db.decode_message(message.arbitration_id, message.data)
    {'AverageRadius': 3.2, 'Enable': 'Enabled', 'Temperature': 250.09}
 
-See the test suite for additional examples: https://github.com/eerimoq/cantools/blob/master/tests/test_cantools.py
+See `examples`_ for additional examples.
 
 Command line tool
 -----------------
+
+The decode subcommand
+^^^^^^^^^^^^^^^^^^^^^
 
 Decode CAN frames captured with the Linux program ``candump``.
 
 .. code-block:: text
 
-   $ candump vcan0 | cantools decode motohawk.dbc
-     vcan0  1F0   [7]  80 4A 0F 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
-     vcan0  1F0   [7]  80 4A 0F 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
-     vcan0  1F0   [7]  80 4A 0F 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
+   $ candump vcan0 | cantools decode tests/files/motohawk.dbc
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 ::
+   ExampleMessage(
+       Enable: 'Enabled' -,
+       AverageRadius: 0.0 m,
+       Temperature: 255.92 degK
+   )
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 ::
+   ExampleMessage(
+       Enable: 'Enabled' -,
+       AverageRadius: 0.0 m,
+       Temperature: 255.92 degK
+   )
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 ::
+   ExampleMessage(
+       Enable: 'Enabled' -,
+       AverageRadius: 0.0 m,
+       Temperature: 255.92 degK
+   )
+
+Alternatively, the decoded message can be printed on a single line:
+
+.. code-block:: text
+
+   $ candump vcan0 | cantools decode --single-line tests/files/motohawk.dbc
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
+     vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
+
+The dump subcommand
+^^^^^^^^^^^^^^^^^^^
+
+Dump given database in a human readable format:
+
+.. code-block:: text
+
+   $ cantools dump tests/files/motohawk.dbc
+   ================================= Messages =================================
+
+     ------------------------------------------------------------------------
+
+     Name:       ExampleMessage
+     Id:         0x1f0
+     Length:     8 bytes
+     Cycle time: - ms
+     Senders:    PCM1
+     Layout:
+
+                             Bit
+
+                7   6   5   4   3   2   1   0
+              +---+---+---+---+---+---+---+---+
+            0 |<-x|<---------------------x|<--|
+              +---+---+---+---+---+---+---+---+
+                |                       +-- AverageRadius
+                +-- Enable
+              +---+---+---+---+---+---+---+---+
+            1 |-------------------------------|
+              +---+---+---+---+---+---+---+---+
+            2 |----------x|   |   |   |   |   |
+        B     +---+---+---+---+---+---+---+---+
+        y               +-- Temperature
+        t     +---+---+---+---+---+---+---+---+
+        e   3 |   |   |   |   |   |   |   |   |
+              +---+---+---+---+---+---+---+---+
+            4 |   |   |   |   |   |   |   |   |
+              +---+---+---+---+---+---+---+---+
+            5 |   |   |   |   |   |   |   |   |
+              +---+---+---+---+---+---+---+---+
+            6 |   |   |   |   |   |   |   |   |
+              +---+---+---+---+---+---+---+---+
+            7 |   |   |   |   |   |   |   |   |
+              +---+---+---+---+---+---+---+---+
+
+     Signal tree:
+
+       -- {root}
+          +-- Enable
+          +-- AverageRadius
+          +-- Temperature
+
+     ------------------------------------------------------------------------
 
 Contributing
 ============
 
 #. Fork the repository.
+
+#. Install prerequisites.
+
+   .. code-block:: text
+
+      pip install -r requirements.txt
 
 #. Implement the new feature or bug fix.
 
@@ -115,8 +208,12 @@ Contributing
 
 .. _KCD: https://github.com/julietkilo/kcd
 
-.. _encoding: http://cantools.readthedocs.io/en/latest/#cantools.db.Message.encode
+.. _tester: http://cantools.readthedocs.io/en/latest/#cantools.tester.Tester
 
-.. _encode_message(): http://cantools.readthedocs.io/en/latest/#cantools.db.File.encode_message
+.. _encoding: http://cantools.readthedocs.io/en/latest/#cantools.database.can.Message.encode
 
-.. _decodes: http://cantools.readthedocs.io/en/latest/#cantools.db.File.decode_message
+.. _encode_message(): http://cantools.readthedocs.io/en/latest/#cantools.database.can.Database.encode_message
+
+.. _decodes: http://cantools.readthedocs.io/en/latest/#cantools.database.can.Database.decode_message
+
+.. _examples: https://github.com/eerimoq/cantools/blob/master/examples
