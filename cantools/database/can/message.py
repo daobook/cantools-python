@@ -9,14 +9,8 @@ from ..utils import encode_data
 from ..utils import decode_data
 from ..utils import create_encode_decode_formats
 from ..errors import Error
-
-
-class EncodeError(Error):
-    pass
-
-
-class DecodeError(Error):
-    pass
+from ..errors import EncodeError
+from ..errors import DecodeError
 
 
 class Message(object):
@@ -40,7 +34,21 @@ class Message(object):
                  dbc_specifics=None,
                  is_extended_frame=False,
                  bus_name=None,
-                 strict=True):
+                 signal_groups=None,
+                 strict=True,
+                 protocol=None):
+        frame_id_bit_length = frame_id.bit_length()
+
+        if is_extended_frame:
+            if frame_id_bit_length > 29:
+                raise Error(
+                    'Extended frame id 0x{:x} is more than 29 bits in '
+                    'message {}.'.format(frame_id, name))
+        elif frame_id_bit_length > 11:
+            raise Error(
+                'Standard frame id 0x{:x} is more than 11 bits in '
+                'message {}.'.format(frame_id, name))
+
         self._frame_id = frame_id
         self._is_extended_frame = is_extended_frame
         self._name = name
@@ -53,9 +61,11 @@ class Message(object):
         self._cycle_time = cycle_time
         self._dbc = dbc_specifics
         self._bus_name = bus_name
+        self._signal_groups = signal_groups
         self._codecs = None
         self._signal_tree = None
         self._strict = strict
+        self._protocol = protocol
         self.refresh()
 
     def _create_codec(self, parent_signal=None, multiplexer_id=None):
@@ -195,6 +205,18 @@ class Message(object):
         return self._signals
 
     @property
+    def signal_groups(self):
+        """A list of all signal groups in the message.
+
+        """
+
+        return self._signal_groups
+
+    @signal_groups.setter
+    def signal_groups(self, value):
+        self._signal_groups = value
+
+    @property
     def comment(self):
         """The message comment, or ``None`` if unavailable.
 
@@ -238,6 +260,10 @@ class Message(object):
 
         return self._dbc
 
+    @dbc.setter
+    def dbc(self, value):
+        self._dbc = value
+
     @property
     def bus_name(self):
         """The message bus name, or ``None`` if unavailable.
@@ -249,6 +275,19 @@ class Message(object):
     @bus_name.setter
     def bus_name(self, value):
         self._bus_name = value
+
+    @property
+    def protocol(self):
+        """The message protocol, or ``None`` if unavailable. Only one protocol
+        is currently supported; ``'j1939'``.
+
+        """
+
+        return self._protocol
+
+    @protocol.setter
+    def protocol(self, value):
+        self._protocol = value
 
     @property
     def signal_tree(self):
@@ -312,6 +351,23 @@ class Message(object):
 
         lines = format_level_lines(self.signal_tree)
         lines = ['-- {root}'] + add_prefix('   ', lines)
+
+        return '\n'.join(lines)
+
+    def signal_choices_string(self):
+        """Returns the signal choices as a string.
+
+        """
+
+        lines = []
+
+        for signal in self._signals:
+            if signal.choices:
+                lines.append('')
+                lines.append(signal.name)
+
+                for value, text in sorted(signal.choices.items()):
+                    lines.append('    {} {}'.format(value, text))
 
         return '\n'.join(lines)
 
@@ -600,21 +656,21 @@ class Message(object):
             if isinstance(value, str):
                 continue
 
-            if signal.minimum is not None:
-                if value < signal.minimum:
+            if signal.decimal.minimum is not None:
+                if value < signal.decimal.minimum:
                     raise EncodeError(
                         "Expected signal '{}' value greater than or equal to "
                         "{} in message '{}', but got {}.".format(signal.name,
-                                                                 signal.minimum,
+                                                                 signal.decimal.minimum,
                                                                  self._name,
                                                                  value))
 
-            if signal.maximum is not None:
-                if value > signal.maximum:
+            if signal.decimal.maximum is not None:
+                if value > signal.decimal.maximum:
                     raise EncodeError(
                         "Expected signal '{}' value less than or equal to "
                         "{} in message '{}', but got {}.".format(signal.name,
-                                                                 signal.maximum,
+                                                                 signal.decimal.maximum,
                                                                  self.name,
                                                                  value))
 
@@ -817,6 +873,16 @@ class Message(object):
                 self._check_signal(message_bits,
                                    self.get_signal_by_name(signal_name))
 
+    def _check_signal_lengths(self):
+        for signal in self._signals:
+            if signal.length <= 0:
+                raise Error(
+                    'The signal {} length {} is not greater than 0 in '
+                    'message {}.'.format(
+                        signal.name,
+                        signal.length,
+                        self.name))
+
     def refresh(self, strict=None):
         """Refresh the internal message state.
 
@@ -827,6 +893,7 @@ class Message(object):
 
         """
 
+        self._check_signal_lengths()
         self._codecs = self._create_codec()
         self._signal_tree = self._create_signal_tree(self._codecs)
 

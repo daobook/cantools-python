@@ -1,12 +1,14 @@
 |buildstatus|_
+|appveyor|_
 |coverage|_
+|nala|_
 
 About
 =====
 
-CAN BUS tools.
+CAN BUS tools in Python 3.
 
-- `DBC`_, `KCD`_, SYM and CDD file parsing.
+- `DBC`_, `KCD`_, SYM, ARXML 4 and CDD file parsing.
 
 - CAN message encoding and decoding.
 
@@ -18,9 +20,13 @@ CAN BUS tools.
 
 - Node `tester`_.
 
+- `C` source code generator.
+
+- CAN bus monitor.
+
 Project homepage: https://github.com/eerimoq/cantools
 
-Documentation: http://cantools.readthedocs.org/en/latest
+Documentation: https://cantools.readthedocs.io
 
 Installation
 ============
@@ -42,7 +48,7 @@ messages and signals.
 
    >>> import cantools
    >>> from pprint import pprint
-   >>> db = cantools.database.load_file('tests/files/motohawk.dbc')
+   >>> db = cantools.database.load_file('tests/files/dbc/motohawk.dbc')
    >>> db.messages
    [message('ExampleMessage', 0x1f0, False, 8, 'Example message used as template in MotoHawk models.')]
    >>> example_message = db.get_message_by_name('ExampleMessage')
@@ -57,9 +63,7 @@ bus using the `python-can`_ package.
 .. code-block:: python
 
    >>> import can
-   >>> can.rc['interface'] = 'socketcan_ctypes'
-   >>> can.rc['channel'] = 'vcan0'
-   >>> can_bus = can.interface.Bus()
+   >>> can_bus = can.interface.Bus('vcan0', bustype='socketcan')
    >>> data = example_message.encode({'Temperature': 250.1, 'AverageRadius': 3.2, 'Enable': 1})
    >>> message = can.Message(arbitration_id=example_message.frame_id, data=data)
    >>> can_bus.send(message)
@@ -87,7 +91,7 @@ Decode CAN frames captured with the Linux program ``candump``.
 
 .. code-block:: text
 
-   $ candump vcan0 | cantools decode tests/files/motohawk.dbc
+   $ candump vcan0 | cantools decode tests/files/dbc/motohawk.dbc
      vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 ::
    ExampleMessage(
        Enable: 'Enabled' -,
@@ -111,7 +115,7 @@ Alternatively, the decoded message can be printed on a single line:
 
 .. code-block:: text
 
-   $ candump vcan0 | cantools decode --single-line tests/files/motohawk.dbc
+   $ candump vcan0 | cantools decode --single-line tests/files/dbc/motohawk.dbc
      vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
      vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
      vcan0  1F0   [8]  80 4A 0F 00 00 00 00 00 :: ExampleMessage(Enable: 'Enabled' -, AverageRadius: 0.0 m, Temperature: 255.92 degK)
@@ -123,7 +127,7 @@ Dump given database in a human readable format:
 
 .. code-block:: text
 
-   $ cantools dump tests/files/motohawk.dbc
+   $ cantools dump tests/files/dbc/motohawk.dbc
    ================================= Messages =================================
 
      ------------------------------------------------------------------------
@@ -168,7 +172,101 @@ Dump given database in a human readable format:
           +-- AverageRadius
           +-- Temperature
 
+     Signal choices:
+
+       Enable
+           0 Disabled
+           1 Enabled
+
      ------------------------------------------------------------------------
+
+The generate C source subcommand
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Generate `C` source code from given database.
+
+The generated code contains:
+
+- Message `structs`_.
+
+- Message `pack`_ and `unpack`_ functions.
+
+- Signal `encode`_ and `decode`_ functions.
+
+- Frame id, length, type, cycle time and signal choices `defines`_.
+
+Known limitations:
+
+- The maximum signal size is 64 bits, which in practice is never
+  exceeded.
+
+Below is an example of how to generate C source code from a
+database. The database is ``tests/files/dbc/motohawk.dbc``.
+
+.. code-block:: text
+
+   $ cantools generate_c_source tests/files/dbc/motohawk.dbc
+   Successfully generated motohawk.h and motohawk.c.
+
+See `motohawk.h`_ and `motohawk.c`_ for the contents of the generated
+files.
+
+In the next example we use ``--database-name`` to set a custom
+namespace for all generated types, defines and functions. The output
+file names are also changed by this option.
+
+.. code-block:: text
+
+   $ cantools generate_c_source --database-name my_database_name tests/files/dbc/motohawk.dbc
+   Successfully generated my_database_name.h and my_database_name.c.
+
+See `my_database_name.h`_ and `my_database_name.c`_ for the contents
+of the generated files.
+
+In the last example we use ``--no-floating-point-numbers`` to generate
+code without floating point types, i.e. ``float`` and ``double``.
+
+.. code-block:: text
+
+   $ cantools generate_c_source --no-floating-point-numbers tests/files/dbc/motohawk.dbc
+   Successfully generated motohawk.h and motohawk.c.
+
+See `motohawk_no_floating_point_numbers.h`_ and
+`motohawk_no_floating_point_numbers.c`_ for the contents of the
+generated files.
+
+Other C code generators:
+
+- http://www.coderdbc.com
+
+- https://github.com/howerj/dbcc
+
+- https://github.com/lonkamikaze/hsk-libs/blob/master/scripts/dbc2c.awk
+
+- https://sourceforge.net/projects/comframe/
+
+The monitor subcommand
+^^^^^^^^^^^^^^^^^^^^^^
+
+Monitor CAN bus traffic in a text based user interface.
+
+.. code-block:: text
+
+   $ cantools monitor tests/files/dbc/motohawk.dbc
+
+.. image:: https://github.com/eerimoq/cantools/raw/master/docs/monitor.png
+
+The menu at the bottom of the monitor shows the available commands.
+
+- Quit: Quit the monitor. Ctrl-C can be used as well.
+
+- Filter: Only display messages matching given regular
+  expression. Press <Enter> to return to the menu from the filter
+  input line.
+
+- Play/Pause: Toggle between playing and paused (or running and freezed).
+
+- Reset: Reset the monitor to its initial state.
 
 Contributing
 ============
@@ -197,12 +295,20 @@ Contributing
 .. |buildstatus| image:: https://travis-ci.org/eerimoq/cantools.svg?branch=master
 .. _buildstatus: https://travis-ci.org/eerimoq/cantools
 
+.. |appveyor| image:: https://ci.appveyor.com/api/projects/status/github/eerimoq/cantools?svg=true
+.. _appveyor: https://ci.appveyor.com/project/eerimoq/cantools/branch/master
+
 .. |coverage| image:: https://coveralls.io/repos/github/eerimoq/cantools/badge.svg?branch=master
 .. _coverage: https://coveralls.io/github/eerimoq/cantools
 
-.. _small DBC-file: https://github.com/eerimoq/cantools/blob/master/tests/files/motohawk.dbc
+.. |nala| image:: https://img.shields.io/badge/nala-test-blue.svg
+.. _nala: https://github.com/eerimoq/nala
 
-.. _python-can: https://python-can.readthedocs.io/en/latest/
+.. _small DBC-file: https://github.com/eerimoq/cantools/blob/master/tests/files/dbc/motohawk.dbc
+
+.. _motohawk.dbc: https://github.com/eerimoq/cantools/blob/master/tests/files/dbc/motohawk.dbc
+
+.. _python-can: https://python-can.readthedocs.io/en/master/
 
 .. _DBC: http://www.socialledge.com/sjsu/index.php?title=DBC_Format
 
@@ -217,3 +323,27 @@ Contributing
 .. _decodes: http://cantools.readthedocs.io/en/latest/#cantools.database.can.Database.decode_message
 
 .. _examples: https://github.com/eerimoq/cantools/blob/master/examples
+
+.. _structs: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L58
+
+.. _pack: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L88
+
+.. _unpack: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L102
+
+.. _encode: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L116
+
+.. _decode: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L125
+
+.. _defines: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h#L42
+
+.. _motohawk.h: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.h
+
+.. _motohawk.c: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk.c
+
+.. _my_database_name.h: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/my_database_name.h
+
+.. _my_database_name.c: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/my_database_name.c
+
+.. _motohawk_no_floating_point_numbers.h: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk_no_floating_point_numbers.h
+
+.. _motohawk_no_floating_point_numbers.c: https://github.com/eerimoq/cantools/blob/master/tests/files/c_source/motohawk_no_floating_point_numbers.c

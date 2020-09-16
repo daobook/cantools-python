@@ -1,3 +1,4 @@
+import os
 from xml.etree import ElementTree
 from .errors import ParseError
 from .errors import Error
@@ -20,8 +21,11 @@ class UnsupportedDatabaseFormatError(Error):
 
     """
 
-    def __init__(self, e_dbc, e_kcd, e_sym, e_cdd):
+    def __init__(self, e_arxml, e_dbc, e_kcd, e_sym, e_cdd):
         message = []
+
+        if e_arxml is not None:
+            message.append('ARXML: "{}"'.format(e_arxml))
 
         if e_dbc is not None:
             message.append('DBC: "{}"'.format(e_dbc))
@@ -39,15 +43,58 @@ class UnsupportedDatabaseFormatError(Error):
 
         super(UnsupportedDatabaseFormatError, self).__init__(message)
 
+        self.e_arxml = e_arxml
         self.e_dbc = e_dbc
         self.e_kcd = e_kcd
         self.e_sym = e_sym
         self.e_cdd = e_cdd
 
 
+def _resolve_database_format_and_encoding(database_format,
+                                          encoding,
+                                          filename):
+    if database_format is None:
+        database_format = os.path.splitext(filename)[1][1:].lower()
+
+    if encoding is None:
+        try:
+            encoding = {
+                'dbc': 'cp1252',
+                'sym': 'cp1252'
+            }[database_format]
+        except KeyError:
+            encoding = 'utf-8'
+
+    return database_format, encoding
+
+
+def _load_file_cache(filename,
+                     database_format,
+                     encoding,
+                     frame_id_mask,
+                     strict,
+                     cache_dir):
+    with open(filename, 'rb') as fin:
+        key = fin.read()
+
+    cache = diskcache.Cache(cache_dir)
+
+    try:
+        return cache[key]
+    except KeyError:
+        with fopen(filename, 'r', encoding=encoding) as fin:
+            database = load(fin,
+                            database_format,
+                            frame_id_mask,
+                            strict)
+        cache[key] = database
+
+        return database
+
+
 def load_file(filename,
               database_format=None,
-              encoding='utf-8',
+              encoding=None,
               frame_id_mask=None,
               strict=True,
               cache_dir=None):
@@ -56,11 +103,55 @@ def load_file(filename,
     :class:`diagnostics.Database<.diagnostics.Database>` object with
     its contents.
 
-    `encoding` specifies the file encoding.
+    `database_format` is one of ``'arxml'``, ``'dbc'``, ``'kcd'``,
+    ``'sym'``, ``cdd`` and ``None``. If ``None``, the database format
+    is selected based on the filename extension as in the table below.
+    Filename extensions are case insensitive.
+
+    +-----------+-----------------+
+    | Extension | Database format |
+    +===========+=================+
+    | .arxml    | ``'arxml'``     |
+    +-----------+-----------------+
+    | .dbc      | ``'dbc'``       |
+    +-----------+-----------------+
+    | .kcd      | ``'kcd'``       |
+    +-----------+-----------------+
+    | .sym      | ``'sym'``       |
+    +-----------+-----------------+
+    | .cdd      | ``'cdd'``       |
+    +-----------+-----------------+
+    | <unknown> | ``None``        |
+    +-----------+-----------------+
+
+    `encoding` specifies the file encoding. If ``None``, the encoding
+    is selected based on the database format as in the table
+    below. Use ``open()`` and :func:`~cantools.database.load()` if
+    platform dependent encoding is desired.
+
+    +-----------------+-------------------+
+    | Database format | Default encoding  |
+    +=================+===================+
+    | ``'arxml'``     | ``'utf-8'``       |
+    +-----------------+-------------------+
+    | ``'dbc'``       | ``'cp1252'``      |
+    +-----------------+-------------------+
+    | ``'kcd'``       | ``'utf-8'``       |
+    +-----------------+-------------------+
+    | ``'sym'``       | ``'cp1252'``      |
+    +-----------------+-------------------+
+    | ``'cdd'``       | ``'utf-8'``       |
+    +-----------------+-------------------+
+    | ``None``        | ``'utf-8'``       |
+    +-----------------+-------------------+
 
     `cache_dir` specifies the database cache location in the file
     system. Give as ``None`` to disable the cache. By default the
-    cache is disabled.
+    cache is disabled. The cache key is the contents of given
+    file. Using a cache will significantly reduce the load time when
+    reloading the same file. The cache directory is automatically
+    created if it does not exist. Remove the cache directory
+    `cache_dir` to clear the cache.
 
     See :func:`~cantools.database.load_string()` for descriptions of
     other arguments.
@@ -76,20 +167,62 @@ def load_file(filename,
 
     """
 
-    if cache_dir is not None:
-        with open(filename, 'rb') as fin:
-            key = fin.read()
+    database_format, encoding = _resolve_database_format_and_encoding(
+        database_format,
+        encoding,
+        filename)
 
-        try:
-            return diskcache.Cache(cache_dir)[key]
-        except KeyError:
-            pass
+    if cache_dir is None:
+        with fopen(filename, 'r', encoding=encoding) as fin:
+            return load(fin,
+                        database_format,
+                        frame_id_mask,
+                        strict)
+    else:
+        return _load_file_cache(filename,
+                                database_format,
+                                encoding,
+                                frame_id_mask,
+                                strict,
+                                cache_dir)
 
-    with fopen(filename, 'r', encoding=encoding) as fin:
-        return load(fin,
-                    database_format,
-                    frame_id_mask,
-                    strict)
+
+def dump_file(database,
+              filename,
+              database_format=None,
+              encoding=None):
+    """Dump given database `database` to given file `filename`.
+
+    See :func:`~cantools.database.load_file()` for descriptions of
+    other arguments.
+
+    The ``'dbc'`` database format will always have Windows-style line
+    endings (``\\r\\n``). For other database formats the line ending
+    depends on the operating system.
+
+    >>> db = cantools.database.load_file('foo.dbc')
+    >>> cantools.database.dump_file(db, 'bar.dbc')
+
+    """
+
+    database_format, encoding = _resolve_database_format_and_encoding(
+        database_format,
+        encoding,
+        filename)
+
+    newline = None
+
+    if database_format == 'dbc':
+        output = database.as_dbc_string()
+        newline = ''
+    elif database_format == 'kcd':
+        output = database.as_kcd_string()
+    else:
+        raise Error(
+            "Unsupported output database format '{}'.".format(database_format))
+
+    with fopen(filename, 'w', encoding=encoding, newline=newline) as fout:
+        fout.write(output)
 
 
 def load(fp,
@@ -131,8 +264,9 @@ def load_string(string,
     :class:`diagnostics.Database<.diagnostics.Database>` object with
     its contents.
 
-    `database_format` may be one of ``'dbc'``, ``'kcd'``, ``'sym'``,
-    ``'cdd'`` or ``None``, where ``None`` means transparent format.
+    `database_format` may be one of ``'arxml'``, ``'dbc'``, ``'kcd'``,
+    ``'sym'``, ``'cdd'`` or ``None``, where ``None`` means transparent
+    format.
 
     See :class:`can.Database<.can.Database>` for a description of
     `strict`.
@@ -149,11 +283,12 @@ def load_string(string,
 
     """
 
-    if database_format not in ['dbc', 'kcd', 'sym', 'cdd', None]:
+    if database_format not in ['arxml', 'dbc', 'kcd', 'sym', 'cdd', None]:
         raise ValueError(
-            "expected database format 'dbc', 'kcd', 'sym', 'cdd' or None, but "
-            "got '{}'".format(database_format))
+            "expected database format 'arxml', 'dbc', 'kcd', 'sym', 'cdd' or "
+            "None, but got '{}'".format(database_format))
 
+    e_arxml = None
     e_dbc = None
     e_kcd = None
     e_sym = None
@@ -163,7 +298,9 @@ def load_string(string,
         db = can.Database(frame_id_mask=frame_id_mask,
                           strict=strict)
 
-        if fmt == 'dbc':
+        if fmt == 'arxml':
+            db.add_arxml_string(string)
+        elif fmt == 'dbc':
             db.add_dbc_string(string)
         elif fmt == 'kcd':
             db.add_kcd_string(string)
@@ -171,6 +308,12 @@ def load_string(string,
             db.add_sym_string(string)
 
         return db
+
+    if database_format in ['arxml', None]:
+        try:
+            return load_can_database('arxml')
+        except (ElementTree.ParseError, ValueError) as e:
+            e_arxml = e
 
     if database_format in ['dbc', None]:
         try:
@@ -198,4 +341,4 @@ def load_string(string,
         except (ElementTree.ParseError, ValueError) as e:
             e_cdd = e
 
-    raise UnsupportedDatabaseFormatError(e_dbc, e_kcd, e_sym, e_cdd)
+    raise UnsupportedDatabaseFormatError(e_arxml, e_dbc, e_kcd, e_sym, e_cdd)

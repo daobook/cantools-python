@@ -1,5 +1,6 @@
 import logging
 
+from .formats import arxml
 from .formats import dbc
 from .formats import kcd
 from .formats import sym
@@ -83,6 +84,10 @@ class Database(object):
 
         return self._version
 
+    @version.setter
+    def version(self, value):
+        self._version = value
+
     @property
     def dbc(self):
         """An object containing dbc specific properties like e.g. attributes.
@@ -90,6 +95,44 @@ class Database(object):
         """
 
         return self._dbc
+
+    @dbc.setter
+    def dbc(self, value):
+        self._dbc = value
+
+    def add_arxml(self, fp):
+        """Read and parse ARXML data from given file-like object and add the
+        parsed data to the database.
+
+        """
+
+        self.add_arxml_string(fp.read())
+
+    def add_arxml_file(self, filename, encoding='utf-8'):
+        """Open, read and parse ARXML data from given file and add the parsed
+        data to the database.
+
+        `encoding` specifies the file encoding.
+
+        """
+
+        with fopen(filename, 'r', encoding=encoding) as fin:
+            self.add_arxml(fin)
+
+    def add_arxml_string(self, string):
+        """Parse given ARXML data string and add the parsed data to the
+        database.
+
+        """
+
+        database = arxml.load_string(string, self._strict)
+
+        self._messages += database.messages
+        self._nodes = database.nodes
+        self._buses = database.buses
+        self._version = database.version
+        self._dbc = database.dbc
+        self.refresh()
 
     def add_dbc(self, fp):
         """Read and parse DBC data from given file-like object and add the
@@ -103,14 +146,14 @@ class Database(object):
 
         self.add_dbc_string(fp.read())
 
-    def add_dbc_file(self, filename, encoding='utf-8'):
+    def add_dbc_file(self, filename, encoding='cp1252'):
         """Open, read and parse DBC data from given file and add the parsed
         data to the database.
 
         `encoding` specifies the file encoding.
 
         >>> db = cantools.database.Database()
-        >>> db.add_dbc_file('foo.dbc', 'r')
+        >>> db.add_dbc_file('foo.dbc')
 
         """
 

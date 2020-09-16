@@ -1,5 +1,73 @@
 # A CAN signal.
 
+class Decimal(object):
+    """Holds the same values as
+    :attr:`~cantools.database.can.Signal.scale`,
+    :attr:`~cantools.database.can.Signal.offset`,
+    :attr:`~cantools.database.can.Signal.minimum` and
+    :attr:`~cantools.database.can.Signal.maximum`, but as
+    ``decimal.Decimal`` instead of ``int`` and ``float`` for higher
+    precision (no rounding errors).
+
+    """
+
+    def __init__(self, scale=None, offset=None, minimum=None, maximum=None):
+        self._scale = scale
+        self._offset = offset
+        self._minimum = minimum
+        self._maximum = maximum
+
+    @property
+    def scale(self):
+        """The scale factor of the signal value as ``decimal.Decimal``.
+
+        """
+
+        return self._scale
+
+    @scale.setter
+    def scale(self, value):
+        self._scale = value
+
+    @property
+    def offset(self):
+        """The offset of the signal value as ``decimal.Decimal``.
+
+        """
+
+        return self._offset
+
+    @offset.setter
+    def offset(self, value):
+        self._offset = value
+
+    @property
+    def minimum(self):
+        """The minimum value of the signal as ``decimal.Decimal``, or ``None``
+        if unavailable.
+
+        """
+
+        return self._minimum
+
+    @minimum.setter
+    def minimum(self, value):
+        self._minimum = value
+
+    @property
+    def maximum(self):
+        """The maximum value of the signal as ``decimal.Decimal``, or ``None``
+        if unavailable.
+
+        """
+
+        return self._maximum
+
+    @maximum.setter
+    def maximum(self, value):
+        self._maximum = value
+
+
 class Signal(object):
     """A CAN signal with position, size, unit and other information. A
     signal is part of a message.
@@ -42,6 +110,7 @@ class Signal(object):
                  length,
                  byte_order='little_endian',
                  is_signed=False,
+                 initial=None,
                  scale=1,
                  offset=0,
                  minimum=None,
@@ -54,16 +123,20 @@ class Signal(object):
                  is_multiplexer=False,
                  multiplexer_ids=None,
                  multiplexer_signal=None,
-                 is_float=False):
+                 is_float=False,
+                 decimal=None,
+                 spn=None):
         self._name = name
         self._start = start
         self._length = length
         self._byte_order = byte_order
         self._is_signed = is_signed
+        self._initial = initial
         self._scale = scale
         self._offset = offset
         self._minimum = minimum
         self._maximum = maximum
+        self._decimal = Decimal() if decimal is None else decimal
         self._unit = unit
         self._choices = choices
         self._dbc = dbc_specifics
@@ -73,6 +146,7 @@ class Signal(object):
         self._multiplexer_ids = multiplexer_ids
         self._multiplexer_signal = multiplexer_signal
         self._is_float = is_float
+        self._spn = spn
 
     @property
     def name(self):
@@ -149,6 +223,18 @@ class Signal(object):
         self._is_float = value
 
     @property
+    def initial(self):
+        """The initial value of the signal, or ``None`` if unavailable.
+
+        """
+
+        return self._initial
+
+    @initial.setter
+    def initial(self, value):
+        self._initial = value
+
+    @property
     def scale(self):
         """The scale factor of the signal value.
 
@@ -197,6 +283,21 @@ class Signal(object):
         self._maximum = value
 
     @property
+    def decimal(self):
+        """The high precision values of
+        :attr:`~cantools.database.can.Signal.scale`,
+        :attr:`~cantools.database.can.Signal.offset`,
+        :attr:`~cantools.database.can.Signal.minimum` and
+        :attr:`~cantools.database.can.Signal.maximum`.
+
+        See :class:`~cantools.database.can.signal.Decimal` for more
+        details.
+
+        """
+
+        return self._decimal
+
+    @property
     def unit(self):
         """The unit of the signal as a string, or ``None`` if unavailable.
 
@@ -224,6 +325,10 @@ class Signal(object):
         """
 
         return self._dbc
+
+    @dbc.setter
+    def dbc(self, value):
+        self._dbc = value
 
     @property
     def comment(self):
@@ -284,13 +389,25 @@ class Signal(object):
     def multiplexer_signal(self, value):
         self._multiplexer_signal = value
 
+    @property
+    def spn(self):
+        """The J1939 Suspect Parameter Number (SPN) value if the signal
+        has this attribute, ``None`` otherwise.
+        
+        """
+
+        return self._spn
+
+    @spn.setter
+    def spn(self, value):
+        self._spn = value
+
     def choice_string_to_number(self, string):
         for choice_number, choice_string in self.choices.items():
             if choice_string == string:
                 return choice_number
 
     def __repr__(self):
-
         if self._choices is None:
             choices = None
         else:
@@ -298,12 +415,13 @@ class Signal(object):
                 ["{}: '{}'".format(value, text)
                  for value, text in self._choices.items()]))
 
-        return "signal('{}', {}, {}, '{}', {}, {}, {}, {}, {}, '{}', {}, {}, {}, {})".format(
+        return "signal('{}', {}, {}, '{}', {}, {}, {}, {}, {}, {}, '{}', {}, {}, {}, {}, {})".format(
             self._name,
             self._start,
             self._length,
             self._byte_order,
             self._is_signed,
+            self._initial,
             self._scale,
             self._offset,
             self._minimum,
@@ -312,4 +430,5 @@ class Signal(object):
             self._is_multiplexer,
             self._multiplexer_ids,
             choices,
+            self._spn,
             "'" + self._comment + "'" if self._comment is not None else None)

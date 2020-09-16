@@ -16,6 +16,8 @@ Functions and classes
 
 .. autofunction:: cantools.database.load_file
 
+.. autofunction:: cantools.database.dump_file
+
 .. autofunction:: cantools.database.load_string
 
 .. autofunction:: cantools.database.load
@@ -28,6 +30,9 @@ Functions and classes
 
 .. autoclass:: cantools.database.can.Signal
     :members:
+
+.. autoclass:: cantools.database.can.signal.Decimal
+    :members:                      
 
 .. autoclass:: cantools.database.diagnostics.Database
     :members:

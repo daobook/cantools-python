@@ -14,9 +14,7 @@ except ImportError:
 
 import can
 
-
-class Error(Exception):
-    pass
+from .errors import Error
 
 
 class DecodedMessage(object):
@@ -225,7 +223,7 @@ class Tester(object):
 
     >>> import can
     >>> import cantools
-    >>> can.rc['interface'] = 'socketcan_native'
+    >>> can.rc['interface'] = 'socketcan'
     >>> can.rc['channel'] = 'vcan0'
     >>> can_bus = can.interface.Bus()
     >>> database = cantools.database.load_file('tests/files/tester.kcd')

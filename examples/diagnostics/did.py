@@ -6,7 +6,6 @@
 # Decoded: {'Country_variant': 'Europe', 'Vehicle_type': 'Sedan', 'Special_setting': 3}
 #
 
-from __future__ import print_function
 import os
 from binascii import hexlify
 import cantools
@@ -18,6 +17,7 @@ EXAMPLE_PATH = os.path.join(SCRIPT_DIR,
                             '..',
                             'tests',
                             'files',
+                            'cdd',
                             'example.cdd')
 
 database = cantools.db.load_file(EXAMPLE_PATH)

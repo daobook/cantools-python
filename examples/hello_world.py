@@ -6,7 +6,6 @@
 # Decoded: {'Enable': 'Enabled', 'AverageRadius': 3.2, 'Temperature': 250.1}
 #
 
-from __future__ import print_function
 import os
 from binascii import hexlify
 import cantools
@@ -17,6 +16,7 @@ MOTOHAWK_PATH = os.path.join(SCRIPT_DIR,
                              '..',
                              'tests',
                              'files',
+                             'dbc',
                              'motohawk.dbc')
 
 database = cantools.db.load_file(MOTOHAWK_PATH)

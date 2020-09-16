@@ -56,8 +56,7 @@ def setup_tester(dut_name,
                  on_message=None,
                  decode_choices=False,
                  scaling=False):
-    filename = os.path.join('tests', 'files', 'tester.kcd')
-    database = cantools.db.load_file(filename)
+    database = cantools.db.load_file('tests/files/kcd/tester.kcd')
     can_bus = CanBus()
     tester = cantools.tester.Tester(dut_name,
                                     database,
@@ -285,8 +284,7 @@ class CanToolsTesterTest(unittest.TestCase):
 
         """
 
-        filename = os.path.join('tests', 'files', 'tester.kcd')
-        database = cantools.db.load_file(filename)
+        database = cantools.db.load_file('tests/files/kcd/tester.kcd')
         can_bus = CanBus()
 
         with self.assertRaises(cantools.tester.Error) as cm:
@@ -300,8 +298,7 @@ class CanToolsTesterTest(unittest.TestCase):
 
         """
 
-        filename = os.path.join('tests', 'files', 'tester.kcd')
-        database = cantools.db.load_file(filename)
+        database = cantools.db.load_file('tests/files/kcd/tester.kcd')
         can_bus = CanBus()
 
         with self.assertRaises(cantools.tester.Error) as cm:
@@ -315,16 +312,14 @@ class CanToolsTesterTest(unittest.TestCase):
 
         """
 
-        filename = os.path.join('tests', 'files', 'foobar.dbc')
-        database = cantools.db.load_file(filename)
+        database = cantools.db.load_file('tests/files/dbc/foobar.dbc')
         can_bus = CanBus()
 
         with self.assertRaises(cantools.tester.Error) as cm:
             cantools.tester.Tester('FOO', database, can_bus, 'BadBus')
 
         self.assertEqual(str(cm.exception),
-                         "expected bus name None as there are no buses defined "
-                         "in the database, but got 'BadBus'")
+                         "expected bus name in ['TheBusName'], but got 'BadBus'")
 
     def test_on_message(self):
         """Test the on_message callback.

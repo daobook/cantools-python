@@ -1,10 +1,13 @@
+# -*- coding: utf-8 -*-
+
 import sys
 import math
-import os
 import unittest
 from decimal import Decimal
 from collections import namedtuple
 import textparser
+import os
+import re
 
 try:
     from unittest.mock import patch
@@ -21,18 +24,30 @@ except ImportError:
     from io import StringIO
 
 import cantools
+from cantools.database.can.formats import dbc
+from cantools.database import UnsupportedDatabaseFormatError
 
 
 class CanToolsDatabaseTest(unittest.TestCase):
 
     maxDiff = None
 
+    def assert_dbc_dump(self, db, filename):
+        actual = db.as_dbc_string()
+        # open(filename, 'wb').write(actual.encode('cp1252'))
+
+        with open(filename, 'rb') as fin:
+            expected = fin.read().decode('cp1252')
+
+        self.assertEqual(actual, expected)
+
     def test_vehicle(self):
-        filename = os.path.join('tests', 'files', 'vehicle.dbc')
+        filename = 'tests/files/dbc/vehicle.dbc'
         db = cantools.database.load_file(filename)
         self.assertEqual(len(db.nodes), 1)
         self.assertEqual(db.nodes[0].name, 'UnusedNode')
         self.assertEqual(len(db.messages), 217)
+        self.assertEqual(db.messages[216].protocol, None)
         self.assertEqual(db.messages[216].name, 'RT_SB_Gyro_Rates')
         self.assertEqual(db.messages[216].frame_id, 155872546)
         self.assertEqual(db.messages[216].senders, [])
@@ -40,8 +55,9 @@ class CanToolsDatabaseTest(unittest.TestCase):
                          "message('RT_SB_INS_Vel_Body_Axes', 0x9588322, True, 8, None)")
         self.assertEqual(repr(db.messages[0].signals[0]),
                          "signal('Validity_INS_Vel_Forwards', 0, 1, 'little_endian', "
-                         "False, 1, 0, 0, 1, 'None', False, None, None, 'Valid when "
+                         "False, 0, 1, 0, 0, 1, 'None', False, None, None, None, 'Valid when "
                          "bit is set, invalid when bit is clear.')")
+        self.assertEqual(db.messages[0].signals[0].initial, 0)
         self.assertEqual(db.messages[0].signals[0].receivers, [])
         self.assertEqual(db.messages[0].cycle_time, None)
         self.assertEqual(db.messages[0].send_type, None)
@@ -54,36 +70,69 @@ class CanToolsDatabaseTest(unittest.TestCase):
                     i += 1
 
         self.assertEqual(i, 15)
+        self.assert_dbc_dump(db, filename)
 
-        with open(filename, 'rb') as fin:
-            if sys.version_info[0] > 2:
-                self.assertEqual(db.as_dbc_string().encode('utf-8'), fin.read())
-            else:
-                self.assertEqual(db.as_dbc_string(), fin.read())
+    def test_dbc_signal_initial_value(self):
+        filename = 'tests/files/dbc/vehicle.dbc'
+        db = cantools.database.load_file(filename)
+
+        message = db.get_message_by_name('RT_IMU06_Accel')
+
+        signal = message.get_signal_by_name('Validity_Accel_Longitudinal')
+        self.assertEqual(signal.initial, None)
+        self.assertEqual(
+            repr(signal),
+            "signal('Validity_Accel_Longitudinal', 0, 1, 'little_endian', False, "
+            "None, 1, 0, None, None, 'None', False, None, None, None, 'Valid when bit is "
+            "set, invalid when bit is clear.')")
+
+        signal = message.get_signal_by_name('Validity_Accel_Lateral')
+        self.assertEqual(signal.initial , 1)
+
+        signal = message.get_signal_by_name('Validity_Accel_Vertical')
+        self.assertEqual(signal.initial, 0)
+
+        signal = message.get_signal_by_name('Accuracy_Accel')
+        self.assertEqual(signal.initial , 127)
+
+        signal = message.get_signal_by_name('Accel_Longitudinal')
+        self.assertEqual(signal.initial , 32767)
+        self.assertEqual(
+            repr(signal),
+            "signal('Accel_Longitudinal', 16, 16, 'little_endian', True, 32767, "
+            "0.001, 0, -65, 65, 'g', False, None, None, None, 'Longitudinal "
+            "acceleration.  This is positive when the vehicle accelerates in a "
+            "forwards direction.')")
+
+        signal = message.get_signal_by_name('Accel_Lateral')
+        self.assertEqual(signal.initial , -30000)
+
+        signal = message.get_signal_by_name('Accel_Vertical')
+        self.assertEqual(signal.initial , 16120)
 
     def test_motohawk(self):
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
+        filename = 'tests/files/dbc/motohawk.dbc'
 
         with open(filename, 'r') as fin:
             db = cantools.db.load(fin)
 
+        self.assertEqual(db.buses, [])
         self.assertEqual(len(db.nodes), 2)
         self.assertEqual(db.nodes[0].name, 'PCM1')
         self.assertEqual(db.nodes[1].name, 'FOO')
         self.assertEqual(len(db.messages), 1)
+        self.assertEqual(db.messages[0].bus_name, None)
         self.assertEqual(len(db.messages[0].signals[2].receivers), 2)
         self.assertEqual(db.messages[0].signals[2].receivers[0], 'PCM1')
         self.assertEqual(db.messages[0].signals[2].receivers[1], 'FOO')
         self.assertEqual(db.messages[0].signals[1].receivers, [])
 
-        with open(filename, 'rb') as fin:
-            self.assertEqual(db.as_dbc_string().encode('ascii'), fin.read())
+        self.assert_dbc_dump(db, filename)
 
     def test_emc32(self):
-        db = cantools.db.File()
-        filename = os.path.join('tests', 'files', 'emc32.dbc')
+        db = cantools.db.Database()
 
-        with open(filename, 'r') as fin:
+        with open('tests/files/dbc/emc32.dbc', 'r') as fin:
             db.add_dbc(fin)
 
         self.assertEqual(len(db.nodes), 1)
@@ -94,10 +143,55 @@ class CanToolsDatabaseTest(unittest.TestCase):
         self.assertEqual(db.messages[0].signals[1].name, 'EMV_Aktion_Status_4')
         self.assertEqual(len(db.messages[0].signals[1].receivers), 0)
 
+        self.assertEqual(len(db.dbc.environment_variables), 17)
+        env_var_1 = db.dbc.environment_variables['EMC_Azimuth']
+        self.assertEqual(env_var_1.name, 'EMC_Azimuth')
+        self.assertEqual(env_var_1.env_type, 1)
+        self.assertEqual(env_var_1.minimum, -180)
+        self.assertEqual(env_var_1.maximum, 400)
+        self.assertEqual(env_var_1.unit, 'deg')
+        self.assertEqual(env_var_1.initial_value, 0)
+        self.assertEqual(env_var_1.env_id, 12)
+        self.assertEqual(env_var_1.access_type, 'DUMMY_NODE_VECTOR0')
+        self.assertEqual(env_var_1.access_node, 'Vector__XXX')
+        self.assertEqual(env_var_1.comment, 'Elevation Head')
+        self.assertEqual(
+            repr(env_var_1),
+            "environment_variable('EMC_Azimuth', 1, -180, 400, 'deg', 0, 12,"
+            " 'DUMMY_NODE_VECTOR0', 'Vector__XXX', 'Elevation Head')")
+
+        env_var_2 = db.dbc.environment_variables['EMC_TrdPower']
+        self.assertEqual(env_var_2.name, 'EMC_TrdPower')
+        self.assertEqual(env_var_2.comment, None)
+        #
+        # Test setters
+        env_var_2.env_type = 1
+        env_var_2.minimum = -180
+        env_var_2.maximum = 400
+        env_var_2.unit = 'deg'
+        env_var_2.initial_value = 0
+        env_var_2.env_id = 12
+        env_var_2.access_type = 'DUMMY_NODE_VECTOR0'
+        env_var_2.access_node = 'Vector__XXX'
+        env_var_2.comment = 'Elevation Head'
+        self.assertEqual(env_var_2.env_type, 1)
+        self.assertEqual(env_var_2.minimum, -180)
+        self.assertEqual(env_var_2.maximum, 400)
+        self.assertEqual(env_var_2.unit, 'deg')
+        self.assertEqual(env_var_2.initial_value, 0)
+        self.assertEqual(env_var_2.env_id, 12)
+        self.assertEqual(env_var_2.access_type, 'DUMMY_NODE_VECTOR0')
+        self.assertEqual(env_var_2.access_node, 'Vector__XXX')
+        self.assertEqual(env_var_2.comment, 'Elevation Head')
+        self.assertEqual(
+            repr(env_var_2),
+            "environment_variable('EMC_TrdPower', 1, -180, 400, 'deg', 0, 12,"
+            " 'DUMMY_NODE_VECTOR0', 'Vector__XXX', 'Elevation Head')")
+
+
     def test_foobar(self):
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'foobar.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/foobar.dbc')
 
         self.assertEqual(len(db.nodes), 4)
         self.assertEqual(db.version, '2.0')
@@ -111,38 +205,45 @@ class CanToolsDatabaseTest(unittest.TestCase):
             "node('FUM', None)\n"
             "\n"
             "message('Foo', 0x12330, True, 8, 'Foo.')\n"
-            "  signal('Foo', 0, 12, 'big_endian', True, 0.01, "
-            "250, 229.53, 270.47, 'degK', False, None, None, None)\n"
-            "  signal('Bar', 24, 32, 'big_endian', True, 0.1, "
-            "0, 0, 5, 'm', False, None, None, 'Bar.')\n"
+            "  signal('Foo', 0, 12, 'big_endian', True, None, 0.01, "
+            "250, 229.53, 270.47, 'degK', False, None, None, None, None)\n"
+            "  signal('Bar', 24, 32, 'big_endian', True, None, 0.1, "
+            "0, 0, 5, 'm', False, None, None, None, 'Bar.')\n"
             "\n"
             "message('Fum', 0x12331, True, 5, None)\n"
-            "  signal('Fum', 0, 12, 'little_endian', True, 1, 0, 0, 10, "
-            "'None', False, None, None, None)\n"
-            "  signal('Fam', 12, 12, 'little_endian', True, 1, 0, "
-            "0, 8, 'None', False, None, {1: \'Enabled\', 0: \'Disabled\'}, None)\n"
+            "  signal('Fum', 0, 12, 'little_endian', True, None, 1, 0, 0, 10, "
+            "'None', False, None, None, None, None)\n"
+            "  signal('Fam', 12, 12, 'little_endian', True, None, 1, 0, "
+            "0, 8, 'None', False, None, {1: \'Enabled\', 0: \'Disabled\'}, None, None)\n"
             "\n"
             "message('Bar', 0x12332, True, 4, None)\n"
-            "  signal('Binary32', 0, 32, 'little_endian', True, 1, 0, None, "
-            "None, 'None', False, None, None, None)\n"
+            "  signal('Binary32', 0, 32, 'little_endian', True, None, 1, 0, None, "
+            "None, 'None', False, None, None, None, None)\n"
             "\n"
             "message('CanFd', 0x12333, True, 64, None)\n"
-            "  signal('Fie', 0, 64, 'little_endian', False, 1, 0, None, None, "
-            "'None', False, None, None, None)\n"
-            "  signal('Fas', 64, 64, 'little_endian', False, 1, 0, None, None, "
-            "'None', False, None, None, None)\n"
+            "  signal('Fie', 0, 64, 'little_endian', False, None, 1, 0, None, None, "
+            "'None', False, None, None, None, None)\n"
+            "  signal('Fas', 64, 64, 'little_endian', False, None, 1, 0, None, None, "
+            "'None', False, None, None, None, None)\n"
             "\n"
             "message('FOOBAR', 0x30c, False, 8, None)\n"
-            "  signal('ACC_02_CRC', 0, 12, 'little_endian', True, 1, 0, 0, 1, "
-            "'None', False, None, None, None)\n")
+            "  signal('ACC_02_CRC', 0, 12, 'little_endian', True, None, 1, 0, 0, 1, "
+            "'None', False, None, None, None, None)\n")
+
+        self.assertEqual(len(db.buses), 1)
+        self.assertEqual(db.buses[0].name, 'TheBusName')
+        self.assertEqual(db.buses[0].comment, None)
+        self.assertEqual(db.buses[0].baudrate, 125000)
 
         message = db.get_message_by_frame_id(0x12331)
         self.assertEqual(message.name, 'Fum')
+        self.assertEqual(message.bus_name, 'TheBusName')
         self.assertEqual(message.senders, ['FOO'])
         self.assertEqual(message.signals[0].is_float, False)
 
         message = db.get_message_by_frame_id(0x12332)
         self.assertEqual(message.name, 'Bar')
+        self.assertEqual(message.bus_name, 'TheBusName')
         self.assertEqual(message.senders, ['FOO', 'BAR'])
         self.assertEqual(message.signals[0].receivers, [ 'FUM'])
         self.assertEqual(message.signals[0].is_float, True)
@@ -150,6 +251,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
 
         message = db.get_message_by_frame_id(0x12333)
         self.assertEqual(message.name, 'CanFd')
+        self.assertEqual(message.bus_name, 'TheBusName')
         self.assertEqual(message.senders, ['FOO'])
         self.assertEqual(message.signals[0].receivers, ['FUM'])
         self.assertEqual(message.signals[0].is_float, False)
@@ -157,8 +259,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
 
     def test_foobar_encode_decode(self):
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'foobar.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/foobar.dbc')
 
         messages = [
             (
@@ -196,10 +297,49 @@ class CanToolsDatabaseTest(unittest.TestCase):
             decoded = db.decode_message(name, encoded)
             self.assertEqual(decoded, decoded_message)
 
+    def test_foobar_encode_decode_frame_ids(self):
+        db = cantools.db.Database()
+        db.add_dbc_file('tests/files/dbc/foobar.dbc')
+
+        messages = [
+            (
+                0x12330,
+                {'Foo': 250, 'Bar': 0.0},
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+            ),
+            (
+                0x12331,
+                {'Fum': 9, 'Fam': 5},
+                b'\x09\x50\x00\x00\x00'
+            ),
+            (
+                0x12332,
+                {'Binary32': 1.0},
+                b'\x00\x00\x80\x3f'
+            ),
+            (
+                0x12333,
+                {'Fie': 0x123456789abcdef, 'Fas': 0xdeadbeefdeadbeef},
+                b'\xef\xcd\xab\x89\x67\x45\x23\x01'
+                b'\xef\xbe\xad\xde\xef\xbe\xad\xde'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+                b'\x00\x00\x00\x00\x00\x00\x00\x00'
+            )
+        ]
+
+        for frame_id, decoded_message, encoded_message in messages:
+            encoded = db.encode_message(frame_id, decoded_message)
+            self.assertEqual(encoded, encoded_message)
+            decoded = db.decode_message(frame_id, encoded)
+            self.assertEqual(decoded, decoded_message)
+
     def test_foobar_decode_masked_frame_id(self):
         db = cantools.db.Database(frame_id_mask=0xff)
-        filename = os.path.join('tests', 'files', 'foobar.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/foobar.dbc')
 
         frame_ids = [
             0x12331,
@@ -210,14 +350,39 @@ class CanToolsDatabaseTest(unittest.TestCase):
         for frame_id in frame_ids:
             db.get_message_by_frame_id(frame_id)
 
+    def test_dbc_dump_val_table(self):
+        filename = 'tests/files/dbc/val_table.dbc'
+        db = cantools.database.load_file(filename)
+
+        self.assertEqual(
+            db.dbc.value_tables,
+            {
+                'Table3': {16: '16', 0: '0', 2: '2', 7: '7'},
+                'Table2': {},
+                'Table1': {0: 'Zero', 1: 'One'}
+            })
+        self.assert_dbc_dump(db, filename)
+
+    def test_dbc_load_empty_choice(self):
+        filename = 'tests/files/dbc/empty_choice.dbc'
+        db = cantools.database.load_file(filename)
+
+        message = db.get_message_by_frame_id(10)
+        self.assertEqual(message.signals[0].name, 'non_empty_choice')
+        self.assertEqual(message.signals[0].choices,
+                         {254: 'Error', 255: 'Not available'})
+        self.assertEqual(message.signals[1].name, 'empty_choice')
+        self.assertEqual(message.signals[1].choices, None)
+        self.assertEqual(message.signals[2].name, 'no_choice')
+        self.assertEqual(message.signals[2].choices, None)
+
     def test_padding_bit_order(self):
         """Encode and decode signals with reversed bit order.
 
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'padding_bit_order.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/padding_bit_order.dbc')
 
         # Message 0.
         msg0_frame_id = 1
@@ -298,22 +463,40 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/motohawk.dbc')
 
         example_message_name = 'ExampleMessage'
         example_message_frame_id = 496
 
-        # Encode with non-enumerated values.
-        decoded_message = {
-            'Temperature': 250.55,
-            'AverageRadius': 3.2,
-            'Enable': 1
-        }
-        encoded_message = b'\xc0\x06\xe0\x00\x00\x00\x00\x00'
+        # Encode and decode with non-enumerated values. Temperature
+        # 229.53 is encoded as a negative value.
+        datas = [
+            (
+                {
+                    'Temperature': 250.55,
+                    'AverageRadius': 3.2,
+                    'Enable': 1
+                },
+                b'\xc0\x06\xe0\x00\x00\x00\x00\x00'
+            ),
+            (
+                {
+                    'Temperature': 229.53,
+                    'AverageRadius': 0,
+                    'Enable': 0
+                },
+                b'\x01\x00\x20\x00\x00\x00\x00\x00'
+            )
+        ]
 
-        encoded = db.encode_message(example_message_frame_id, decoded_message)
-        self.assertEqual(encoded, encoded_message)
+        for decoded_message, encoded_message in datas:
+            encoded = db.encode_message(example_message_frame_id,
+                                        decoded_message)
+            self.assertEqual(encoded, encoded_message)
+            decoded = db.decode_message(example_message_frame_id,
+                                        encoded,
+                                        decode_choices=False)
+            self.assertEqual(decoded, decoded_message)
 
         # Encode with enumerated values.
         decoded_message = {
@@ -321,6 +504,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
             'AverageRadius': 3.2,
             'Enable': 'Enabled'
         }
+        encoded_message = b'\xc0\x06\xe0\x00\x00\x00\x00\x00'
 
         # By frame id.
         encoded = db.encode_message(example_message_frame_id, decoded_message)
@@ -340,8 +524,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/motohawk.dbc')
 
         decoded_message = {
             'Temperature': 250.55,
@@ -361,8 +544,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'socialledge.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/socialledge.dbc')
 
         decoded_message = {
             'DRIVER_HEARTBEAT_cmd': 1
@@ -388,8 +570,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/motohawk.dbc')
 
         decoded_message = {
             'Temperature': 55,
@@ -413,8 +594,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
 
         """
 
-        filename = os.path.join('tests', 'files', 'signal_range.kcd')
-        db = cantools.database.load_file(filename)
+        db = cantools.database.load_file('tests/files/kcd/signal_range.kcd')
 
         # Values in range.
         datas = [
@@ -501,8 +681,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/motohawk.dbc')
 
         decoded_message = {
             'Temperature': 3,
@@ -524,8 +703,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
 
     def test_socialledge(self):
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'socialledge.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/socialledge.dbc')
 
         # Verify nodes.
         self.assertEqual(len(db.nodes), 5)
@@ -599,8 +777,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'socialledge.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/socialledge.dbc')
 
         frame_id = 200
 
@@ -625,8 +802,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         """
 
         db = cantools.db.Database()
-        filename = os.path.join('tests', 'files', 'socialledge.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/socialledge.dbc')
 
         frame_id = 200
 
@@ -646,9 +822,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         self.assertEqual(decoded, decoded_message)
 
     def test_get_message_by_frame_id_and_name(self):
-        filename = os.path.join('tests', 'files', 'motohawk.dbc')
-
-        with open(filename, 'r') as fin:
+        with open('tests/files/dbc/motohawk.dbc', 'r') as fin:
             db = cantools.db.load(fin)
 
         message = db.get_message_by_name('ExampleMessage')
@@ -658,8 +832,7 @@ class CanToolsDatabaseTest(unittest.TestCase):
         self.assertEqual(message.frame_id, 496)
 
     def test_get_signal_by_name(self):
-        filename = os.path.join('tests', 'files', 'foobar.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/foobar.dbc')
 
         message = db.get_message_by_name('Foo')
 
@@ -674,255 +847,18 @@ class CanToolsDatabaseTest(unittest.TestCase):
 
         self.assertEqual(str(cm.exception), "'Fum'")
 
-    def test_command_line_decode(self):
-        argv = ['cantools', 'decode', 'tests/files/socialledge.dbc']
-        input_data = """\
-  vcan0  0C8   [8]  F0 00 00 00 00 00 00 00
-  vcan0  064   [10]  F0 01 FF FF FF FF FF FF FF FF
-  vcan0  ERROR
+    def test_cp1252_dbc(self):
+        db = cantools.database.load_file('tests/files/dbc/cp1252.dbc')
 
-  vcan0  1F4   [4]  01 02 03 04
-  vcan0  1F4   [3]  01 02 03
-  vcan0  1F3   [3]  01 02 03
-"""
-
-        expected_output = """\
-  vcan0  0C8   [8]  F0 00 00 00 00 00 00 00 ::
-SENSOR_SONARS(
-    SENSOR_SONARS_mux: 0,
-    SENSOR_SONARS_err_count: 15,
-    SENSOR_SONARS_left: 0.0,
-    SENSOR_SONARS_middle: 0.0,
-    SENSOR_SONARS_right: 0.0,
-    SENSOR_SONARS_rear: 0.0
-)
-  vcan0  064   [10]  F0 01 FF FF FF FF FF FF FF FF ::
-DRIVER_HEARTBEAT(
-    DRIVER_HEARTBEAT_cmd: 240
-)
-  vcan0  ERROR
-
-  vcan0  1F4   [4]  01 02 03 04 ::
-IO_DEBUG(
-    IO_DEBUG_test_unsigned: 1,
-    IO_DEBUG_test_enum: 'IO_DEBUG_test2_enum_two',
-    IO_DEBUG_test_signed: 3,
-    IO_DEBUG_test_float: 2.0
-)
-  vcan0  1F4   [3]  01 02 03 :: unpack requires at least 32 bits to unpack (got 24)
-  vcan0  1F3   [3]  01 02 03 :: Unknown frame id 499 (0x1f3)
-"""
-
-        stdout = StringIO()
-
-        with patch('sys.stdin', StringIO(input_data)):
-            with patch('sys.stdout', stdout):
-                with patch('sys.argv', argv):
-                    cantools._main()
-                    actual_output = stdout.getvalue()
-                    self.assertEqual(actual_output, expected_output)
-
-    def test_command_line_single_line_decode(self):
-        argv = [
-            'cantools',
-            'decode',
-            '--single-line',
-            'tests/files/socialledge.dbc'
-        ]
-
-        input_data = """\
-  vcan0  0C8   [8]  F0 00 00 00 00 00 00 00
-  vcan0  064   [10]  F0 01 FF FF FF FF FF FF FF FF
-  vcan0  ERROR
-
-  vcan0  1F4   [4]  01 02 03 04
-  vcan0  1F4   [3]  01 02 03
-  vcan0  1F3   [3]  01 02 03
-"""
-
-        expected_output = """\
-  vcan0  0C8   [8]  F0 00 00 00 00 00 00 00 :: SENSOR_SONARS(SENSOR_SONARS_mux: 0, SENSOR_SONARS_err_count: 15, SENSOR_SONARS_left: 0.0, SENSOR_SONARS_middle: 0.0, SENSOR_SONARS_right: 0.0, SENSOR_SONARS_rear: 0.0)
-  vcan0  064   [10]  F0 01 FF FF FF FF FF FF FF FF :: DRIVER_HEARTBEAT(DRIVER_HEARTBEAT_cmd: 240)
-  vcan0  ERROR
-
-  vcan0  1F4   [4]  01 02 03 04 :: IO_DEBUG(IO_DEBUG_test_unsigned: 1, IO_DEBUG_test_enum: 'IO_DEBUG_test2_enum_two', IO_DEBUG_test_signed: 3, IO_DEBUG_test_float: 2.0)
-  vcan0  1F4   [3]  01 02 03 :: unpack requires at least 32 bits to unpack (got 24)
-  vcan0  1F3   [3]  01 02 03 :: Unknown frame id 499 (0x1f3)
-"""
-
-        stdout = StringIO()
-
-        with patch('sys.stdin', StringIO(input_data)):
-            with patch('sys.stdout', stdout):
-                with patch('sys.argv', argv):
-                    cantools._main()
-                    actual_output = stdout.getvalue()
-                    self.assertEqual(actual_output, expected_output)
-
-    def test_command_line_dump(self):
-        argv = [
-            'cantools',
-            'dump',
-            'tests/files/motohawk.dbc'
-        ]
-
-        expected_output = """\
-================================= Messages =================================
-
-  ------------------------------------------------------------------------
-
-  Name:       ExampleMessage
-  Id:         0x1f0
-  Length:     8 bytes
-  Cycle time: - ms
-  Senders:    PCM1
-  Layout:
-
-                          Bit
-
-             7   6   5   4   3   2   1   0
-           +---+---+---+---+---+---+---+---+
-         0 |<-x|<---------------------x|<--|
-           +---+---+---+---+---+---+---+---+
-             |                       +-- AverageRadius
-             +-- Enable
-           +---+---+---+---+---+---+---+---+
-         1 |-------------------------------|
-           +---+---+---+---+---+---+---+---+
-         2 |----------x|   |   |   |   |   |
-     B     +---+---+---+---+---+---+---+---+
-     y               +-- Temperature
-     t     +---+---+---+---+---+---+---+---+
-     e   3 |   |   |   |   |   |   |   |   |
-           +---+---+---+---+---+---+---+---+
-         4 |   |   |   |   |   |   |   |   |
-           +---+---+---+---+---+---+---+---+
-         5 |   |   |   |   |   |   |   |   |
-           +---+---+---+---+---+---+---+---+
-         6 |   |   |   |   |   |   |   |   |
-           +---+---+---+---+---+---+---+---+
-         7 |   |   |   |   |   |   |   |   |
-           +---+---+---+---+---+---+---+---+
-
-  Signal tree:
-
-    -- {root}
-       +-- Enable
-       +-- AverageRadius
-       +-- Temperature
-
-  ------------------------------------------------------------------------
-"""
-
-        stdout = StringIO()
-
-        with patch('sys.stdout', stdout):
-            with patch('sys.argv', argv):
-                cantools._main()
-                actual_output = stdout.getvalue()
-                self.assertEqual(actual_output, expected_output)
-
-    def test_command_line_dump_no_sender(self):
-        argv = [
-            'cantools',
-            'dump',
-            '--no-strict',
-            'tests/files/no_sender.dbc'
-        ]
-
-        expected_output = """\
-================================= Messages =================================
-
-  ------------------------------------------------------------------------
-
-  Name:       VECTOR__INDEPENDENT_SIG_MSG
-  Id:         0x40000000
-  Length:     0 bytes
-  Cycle time: - ms
-  Senders:    -
-  Layout:
-
-                          Bit
-
-             7   6   5   4   3   2   1   0
-           +---+---+---+---+---+---+---+---+
-     B   0 |<-----------------------------x|
-     y     +---+---+---+---+---+---+---+---+
-     t       +-- signal_without_sender
-     e
-
-  Signal tree:
-
-    -- {root}
-       +-- signal_without_sender
-
-  ------------------------------------------------------------------------
-"""
-
-        stdout = StringIO()
-
-        with patch('sys.stdout', stdout):
-            with patch('sys.argv', argv):
-                cantools._main()
-                actual_output = stdout.getvalue()
-                self.assertEqual(actual_output, expected_output)
-
-    def test_command_line_convert(self):
-        # DBC to KCD.
-        argv = [
-            'cantools',
-            'convert',
-            'tests/files/motohawk.dbc',
-            'test_command_line_convert.kcd'
-        ]
-
-        if os.path.exists('test_command_line_convert.kcd'):
-            os.remove('test_command_line_convert.kcd')
-
-        with patch('sys.argv', argv):
-            cantools._main()
-
-        db = cantools.database.Database()
-        db.add_kcd_file('test_command_line_convert.kcd')
-        self.assertEqual(db.version, '1.0')
-
-        # KCD to DBC.
-        argv = [
-            'cantools',
-            'convert',
-            'test_command_line_convert.kcd',
-            'test_command_line_convert.dbc'
-        ]
-
-        if os.path.exists('test_command_line_convert.dbc'):
-            os.remove('test_command_line_convert.dbc')
-
-        with patch('sys.argv', argv):
-            cantools._main()
-
-        db = cantools.database.Database()
-        db.add_dbc_file('test_command_line_convert.dbc')
-        self.assertEqual(db.version, '1.0')
-
-    def test_command_line_convert_bad_outfile(self):
-        argv = [
-            'cantools',
-            'convert',
-            'tests/files/motohawk.dbc',
-            'test_command_line_convert.foo'
-        ]
-
-        with patch('sys.argv', argv):
-            with self.assertRaises(SystemExit) as cm:
-                cantools._main()
-
-            self.assertEqual(
-                str(cm.exception),
-                "error: Unsupported output database format 'foo'.")
+        self.assertEqual(
+            db.nodes[0].comment,
+            bytearray([
+                v for v in range(256)
+                if v not in [34, 129, 141, 143, 144, 157]
+            ])[32:].decode('cp1252'))
 
     def test_the_homer(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
 
         self.assertEqual(db.version, '1.23')
         self.assertEqual(len(db.nodes), 18)
@@ -974,6 +910,10 @@ IO_DEBUG(
         self.assertEqual(seat_configuration.offset, 0)
         self.assertEqual(seat_configuration.minimum, None)
         self.assertEqual(seat_configuration.maximum, None)
+        self.assertEqual(seat_configuration.decimal.scale, 1)
+        self.assertEqual(seat_configuration.decimal.offset, 0)
+        self.assertEqual(seat_configuration.decimal.minimum, None)
+        self.assertEqual(seat_configuration.decimal.maximum, None)
         self.assertEqual(seat_configuration.unit, None)
         self.assertEqual(seat_configuration.choices, None)
         self.assertEqual(seat_configuration.comment, None)
@@ -991,6 +931,10 @@ IO_DEBUG(
         self.assertEqual(tank_temperature.offset, 0)
         self.assertEqual(tank_temperature.minimum, None)
         self.assertEqual(tank_temperature.maximum, None)
+        self.assertEqual(tank_temperature.decimal.scale, 1)
+        self.assertEqual(tank_temperature.decimal.offset, 0)
+        self.assertEqual(tank_temperature.decimal.minimum, None)
+        self.assertEqual(tank_temperature.decimal.maximum, None)
         self.assertEqual(tank_temperature.unit, 'Cel')
         self.assertEqual(tank_temperature.choices, None)
         self.assertEqual(tank_temperature.comment, None)
@@ -1072,6 +1016,10 @@ IO_DEBUG(
         self.assertEqual(outside_temp.offset, -40)
         self.assertEqual(outside_temp.minimum, 0)
         self.assertEqual(outside_temp.maximum, 100)
+        self.assertEqual(outside_temp.decimal.scale, Decimal('0.05'))
+        self.assertEqual(outside_temp.decimal.offset, -40)
+        self.assertEqual(outside_temp.decimal.minimum, 0)
+        self.assertEqual(outside_temp.decimal.maximum, 100)
         self.assertEqual(outside_temp.unit, 'Cel')
         self.assertEqual(outside_temp.choices, {0: 'init'})
         self.assertEqual(outside_temp.comment, 'Outside temperature.')
@@ -1089,6 +1037,10 @@ IO_DEBUG(
         self.assertEqual(speed_km.offset, 0)
         self.assertEqual(speed_km.minimum, None)
         self.assertEqual(speed_km.maximum, None)
+        self.assertEqual(speed_km.decimal.scale, Decimal('0.2'))
+        self.assertEqual(speed_km.decimal.offset, 0)
+        self.assertEqual(speed_km.decimal.minimum, None)
+        self.assertEqual(speed_km.decimal.maximum, None)
         self.assertEqual(speed_km.unit, 'km/h')
         self.assertEqual(speed_km.choices, {16777215: 'invalid'})
         self.assertEqual(speed_km.comment,
@@ -1142,6 +1094,10 @@ IO_DEBUG(
         self.assertEqual(ambient_lux.offset, 0)
         self.assertEqual(ambient_lux.minimum, None)
         self.assertEqual(ambient_lux.maximum, None)
+        self.assertEqual(ambient_lux.decimal.scale, 1)
+        self.assertEqual(ambient_lux.decimal.offset, 0)
+        self.assertEqual(ambient_lux.decimal.minimum, None)
+        self.assertEqual(ambient_lux.decimal.maximum, None)
         self.assertEqual(ambient_lux.unit, 'Lux')
         self.assertEqual(ambient_lux.choices, None)
         self.assertEqual(ambient_lux.comment, None)
@@ -1159,6 +1115,10 @@ IO_DEBUG(
         self.assertEqual(windshield_humidity.offset, 0)
         self.assertEqual(windshield_humidity.minimum, None)
         self.assertEqual(windshield_humidity.maximum, None)
+        self.assertEqual(windshield_humidity.decimal.scale, 1)
+        self.assertEqual(windshield_humidity.decimal.offset, 0)
+        self.assertEqual(windshield_humidity.decimal.minimum, None)
+        self.assertEqual(windshield_humidity.decimal.maximum, None)
         self.assertEqual(windshield_humidity.unit, '% RH')
         self.assertEqual(windshield_humidity.choices, None)
         self.assertEqual(windshield_humidity.comment, None)
@@ -1176,6 +1136,10 @@ IO_DEBUG(
         self.assertEqual(wheel_angle.offset, -800)
         self.assertEqual(wheel_angle.minimum, None)
         self.assertEqual(wheel_angle.maximum, None)
+        self.assertEqual(wheel_angle.decimal.scale, Decimal('0.1'))
+        self.assertEqual(wheel_angle.decimal.offset, -800)
+        self.assertEqual(wheel_angle.decimal.minimum, None)
+        self.assertEqual(wheel_angle.decimal.maximum, None)
         self.assertEqual(wheel_angle.unit, 'deg')
         self.assertEqual(wheel_angle.choices,
                          {
@@ -1200,6 +1164,10 @@ IO_DEBUG(
         self.assertEqual(big_endian_a.offset, 0)
         self.assertEqual(big_endian_a.minimum, None)
         self.assertEqual(big_endian_a.maximum, None)
+        self.assertEqual(big_endian_a.decimal.scale, 1)
+        self.assertEqual(big_endian_a.decimal.offset, 0)
+        self.assertEqual(big_endian_a.decimal.minimum, None)
+        self.assertEqual(big_endian_a.decimal.maximum, None)
         self.assertEqual(big_endian_a.unit, None)
         self.assertEqual(big_endian_a.choices, None)
         self.assertEqual(big_endian_a.comment, None)
@@ -1214,9 +1182,8 @@ IO_DEBUG(
         self.assertEqual(message.length, 1)
 
     def test_the_homer_encode_length(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
         db = cantools.db.Database()
-        db.add_kcd_file(filename)
+        db.add_kcd_file('tests/files/kcd/the_homer.kcd')
 
         frame_id = 0x400
         decoded_message = {
@@ -1231,12 +1198,11 @@ IO_DEBUG(
         self.assertEqual(encoded, encoded_message)
 
     def test_the_homer_float(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
         db = cantools.db.Database()
-        db.add_kcd_file(filename)
+        db.add_kcd_file('tests/files/kcd/the_homer.kcd')
 
         # Message 1 (binary64).
-        frame_id = 0x832
+        frame_id = 0x732
 
         decoded_message = {'AmbientLux': math.pi}
         encoded_message = b'\x18\x2d\x44\x54\xfb\x21\x09\x40'
@@ -1248,7 +1214,7 @@ IO_DEBUG(
         self.assertEqual(decoded, decoded_message)
 
         # Message 2 (binary32).
-        frame_id = 0x845
+        frame_id = 0x745
 
         decoded_message = {'Windshield': 3.1415927410125732}
         encoded_message = b'\xdb\x0f\x49\x40'
@@ -1260,8 +1226,7 @@ IO_DEBUG(
         self.assertEqual(decoded, decoded_message)
 
     def test_the_homer_encode_decode_choices(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
 
         messages = [
             (         {'EngagedGear': 'disengaged'}, b'\x00\x00'),
@@ -1290,21 +1255,20 @@ IO_DEBUG(
 
         """
 
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.database.load_file(filename)
+        db = cantools.database.load_file('tests/files/kcd/the_homer.kcd')
 
         messages = [
-            (0x900, {'EnumTest': 'one'}, b'\x80\x00\x00\x00\x00\x00\x00\x00'),
-            (0x900, {'EnumTest': 'two'}, b'\xff\x00\x00\x00\x00\x00\x00\x00'),
-            (0x901, {'EnumTestFloat': 'one'}, b'\x00\x00\x00\x43\x00\x00\x00\x00'),
-            (0x901, {'EnumTestFloat': 'two'}, b'\x00\x00\x7f\x43\x00\x00\x00\x00'),
+            (0x700, {'EnumTest': 'one'}, b'\x80\x00\x00\x00\x00\x00\x00\x00'),
+            (0x700, {'EnumTest': 'two'}, b'\xff\x00\x00\x00\x00\x00\x00\x00'),
+            (0x701, {'EnumTestFloat': 'one'}, b'\x00\x00\x00\x43\x00\x00\x00\x00'),
+            (0x701, {'EnumTestFloat': 'two'}, b'\x00\x00\x7f\x43\x00\x00\x00\x00'),
 
             # Verify encode/decode using int/float to verify scaling
             # still works.
-            (0x900, {'EnumTest': 4}, b'\x02\x00\x00\x00\x00\x00\x00\x00'),
-            (0x901, {'EnumTestFloat': 4}, b'\x00\x00\x00\x40\x00\x00\x00\x00'),
-            (0x900, {'EnumTest': 4.0}, b'\x02\x00\x00\x00\x00\x00\x00\x00'),
-            (0x901, {'EnumTestFloat': 4.0}, b'\x00\x00\x00\x40\x00\x00\x00\x00')
+            (0x700, {'EnumTest': 4}, b'\x02\x00\x00\x00\x00\x00\x00\x00'),
+            (0x701, {'EnumTestFloat': 4}, b'\x00\x00\x00\x40\x00\x00\x00\x00'),
+            (0x700, {'EnumTest': 4.0}, b'\x02\x00\x00\x00\x00\x00\x00\x00'),
+            (0x701, {'EnumTestFloat': 4.0}, b'\x00\x00\x00\x40\x00\x00\x00\x00')
         ]
 
         for message_id, decoded_message, encoded_message in messages:
@@ -1314,8 +1278,7 @@ IO_DEBUG(
             self.assertEqual(decoded, decoded_message)
 
     def test_the_homer_encode_decode_big_endian(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
 
         decoded_message = {
             'A': 0x140fa,
@@ -1329,9 +1292,36 @@ IO_DEBUG(
         decoded = db.decode_message('BigEndian', encoded)
         self.assertEqual(decoded, decoded_message)
 
+    def test_the_homer_encode_decode_signed(self):
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
+
+        datas = [
+            (
+                {
+                    'TankLevel': 0,
+                    'TankTemperature': -32768,
+                    'FillingStatus': 0
+                },
+                b'\x00\x00\x00\x80\x00'
+            ),
+            (
+                {
+                    'TankLevel': 65535,
+                    'TankTemperature': 32767,
+                    'FillingStatus': 15
+                },
+                b'\xff\xff\xff\x7f\x0f'
+            )
+        ]
+
+        for decoded_message, encoded_message in datas:
+            encoded = db.encode_message('TankController', decoded_message)
+            self.assertEqual(encoded, encoded_message)
+            decoded = db.decode_message('TankController', encoded)
+            self.assertEqual(decoded, decoded_message)
+
     def test_empty_kcd(self):
-        filename = os.path.join('tests', 'files', 'empty.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/empty.kcd')
 
         self.assertEqual(db.version, None)
         self.assertEqual(db.nodes, [])
@@ -1348,25 +1338,22 @@ IO_DEBUG(
             'got WrongRootElement."')
 
     def test_jopp_5_0_sym(self):
-        filename = os.path.join('tests', 'files', 'jopp-5.0.sym')
         db = cantools.db.Database()
 
         with self.assertRaises(cantools.db.ParseError) as cm:
-            db.add_sym_file(filename)
+            db.add_sym_file('tests/files/sym/jopp-5.0.sym')
 
         self.assertEqual(str(cm.exception), 'Only SYM version 6.0 is supported.')
 
     def test_jopp_6_0_sym(self):
-        filename = os.path.join('tests', 'files', 'jopp-6.0.sym')
         db = cantools.db.Database()
-        db.add_sym_file(filename)
+        db.add_sym_file('tests/files/sym/jopp-6.0.sym')
 
         self.assertEqual(len(db.messages), 6)
         self.assertEqual(len(db.messages[0].signals), 0)
 
         # Message1.
         message_1 = db.messages[3]
-        self.assertEqual(len(message_1.signals), 2)
         self.assertEqual(message_1.frame_id, 0)
         self.assertEqual(message_1.is_extended_frame, False)
         self.assertEqual(message_1.name, 'Message1')
@@ -1375,7 +1362,7 @@ IO_DEBUG(
         self.assertEqual(message_1.send_type, None)
         self.assertEqual(message_1.cycle_time, 30)
         self.assertEqual(len(message_1.signals), 2)
-        self.assertEqual(message_1.comment, None)
+        self.assertEqual(message_1.comment, 'apa')
         self.assertEqual(message_1.bus_name, None)
 
         signal_1 = message_1.signals[0]
@@ -1385,16 +1372,20 @@ IO_DEBUG(
         self.assertEqual(signal_1.receivers, [])
         self.assertEqual(signal_1.byte_order, 'little_endian')
         self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
         self.assertEqual(signal_1.scale, 1)
         self.assertEqual(signal_1.offset, 0)
         self.assertEqual(signal_1.minimum, None)
         self.assertEqual(signal_1.maximum, 255)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, 255)
         self.assertEqual(signal_1.unit, 'A')
         self.assertEqual(signal_1.choices, None)
         self.assertEqual(signal_1.comment, None)
         self.assertEqual(signal_1.is_multiplexer, False)
         self.assertEqual(signal_1.multiplexer_ids, None)
-        self.assertEqual(signal_1.is_float, False)
 
         signal_2 = message_1.signals[1]
         self.assertEqual(signal_2.name, 'Signal2')
@@ -1403,16 +1394,20 @@ IO_DEBUG(
         self.assertEqual(signal_2.receivers, [])
         self.assertEqual(signal_2.byte_order, 'little_endian')
         self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, True)
         self.assertEqual(signal_2.scale, 1)
         self.assertEqual(signal_2.offset, 48)
         self.assertEqual(signal_2.minimum, 16)
         self.assertEqual(signal_2.maximum, 130)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 48)
+        self.assertEqual(signal_2.decimal.minimum, 16)
+        self.assertEqual(signal_2.decimal.maximum, 130)
         self.assertEqual(signal_2.unit, 'V')
         self.assertEqual(signal_2.choices, None)
-        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.comment, 'bbb')
         self.assertEqual(signal_2.is_multiplexer, False)
         self.assertEqual(signal_2.multiplexer_ids, None)
-        self.assertEqual(signal_2.is_float, True)
 
         # Message2.
         message_2 = db.messages[1]
@@ -1435,16 +1430,20 @@ IO_DEBUG(
         self.assertEqual(signal_3.receivers, [])
         self.assertEqual(signal_3.byte_order, 'big_endian')
         self.assertEqual(signal_3.is_signed, True)
+        self.assertEqual(signal_3.is_float, False)
         self.assertEqual(signal_3.scale, 1)
         self.assertEqual(signal_3.offset, 0)
         self.assertEqual(signal_3.minimum, 0)
         self.assertEqual(signal_3.maximum, 1)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, 0)
+        self.assertEqual(signal_3.decimal.maximum, 1)
         self.assertEqual(signal_3.unit, None)
         self.assertEqual(signal_3.choices, {0: 'foo', 1: 'bar'})
         self.assertEqual(signal_3.comment, None)
         self.assertEqual(signal_3.is_multiplexer, False)
         self.assertEqual(signal_3.multiplexer_ids, None)
-        self.assertEqual(signal_3.is_float, False)
 
         # Symbol2.
         signal_4 = db.messages[4].signals[0]
@@ -1454,16 +1453,20 @@ IO_DEBUG(
         self.assertEqual(signal_4.receivers, [])
         self.assertEqual(signal_4.byte_order, 'little_endian')
         self.assertEqual(signal_4.is_signed, False)
+        self.assertEqual(signal_4.is_float, True)
         self.assertEqual(signal_4.scale, 6)
         self.assertEqual(signal_4.offset, 5)
         self.assertEqual(signal_4.minimum, -1.7e+308)
         self.assertEqual(signal_4.maximum, 1.7e+308)
+        self.assertEqual(signal_4.decimal.scale, 6)
+        self.assertEqual(signal_4.decimal.offset, 5)
+        self.assertEqual(signal_4.decimal.minimum, Decimal('-1.7e+308'))
+        self.assertEqual(signal_4.decimal.maximum, Decimal('1.7e+308'))
         self.assertEqual(signal_4.unit, '*UU')
         self.assertEqual(signal_4.choices, None)
         self.assertEqual(signal_4.comment, None)
         self.assertEqual(signal_4.is_multiplexer, False)
         self.assertEqual(signal_4.multiplexer_ids, None)
-        self.assertEqual(signal_4.is_float, True)
 
         # Symbol3.
         symbol_3 = db.messages[5]
@@ -1511,17 +1514,501 @@ IO_DEBUG(
         decoded = db.decode_message(frame_id, encoded)
         self.assertEqual(decoded['Signal3'], 'bar')
 
+    def test_empty_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/empty-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 0)
+
+    def test_send_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/send-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+        self.assertEqual(db.messages[0].name, 'Symbol1')
+
+    def test_receive_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/receive-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+        self.assertEqual(db.messages[0].name, 'Symbol1')
+
+    def test_sendreceive_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/sendreceive-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+        self.assertEqual(db.messages[0].name, 'Symbol1')
+
+    def test_signal_types_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/signal-types-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+        self.assertEqual(len(db.messages[0].signals), 8)
+
+        signal_0 = db.messages[0].signals[0]
+        self.assertEqual(signal_0.name, 'Bit')
+        self.assertEqual(signal_0.start, 0)
+        self.assertEqual(signal_0.length, 1)
+        self.assertEqual(signal_0.receivers, [])
+        self.assertEqual(signal_0.byte_order, 'little_endian')
+        self.assertEqual(signal_0.is_signed, False)
+        self.assertEqual(signal_0.is_float, False)
+        self.assertEqual(signal_0.scale, 1)
+        self.assertEqual(signal_0.offset, 0)
+        self.assertEqual(signal_0.minimum, 0)
+        self.assertEqual(signal_0.maximum, 1)
+        self.assertEqual(signal_0.decimal.scale, 1)
+        self.assertEqual(signal_0.decimal.offset, 0)
+        self.assertEqual(signal_0.decimal.minimum, 0)
+        self.assertEqual(signal_0.decimal.maximum, 1)
+        self.assertEqual(signal_0.unit, None)
+        self.assertEqual(signal_0.choices, None)
+        self.assertEqual(signal_0.comment, None)
+        self.assertEqual(signal_0.is_multiplexer, False)
+        self.assertEqual(signal_0.multiplexer_ids, None)
+
+        signal_1 = db.messages[0].signals[1]
+        self.assertEqual(signal_1.name, 'Char')
+        self.assertEqual(signal_1.start, 1)
+        self.assertEqual(signal_1.length, 8)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'little_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, None)
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = db.messages[0].signals[2]
+        self.assertEqual(signal_2.name, 'Enum')
+        self.assertEqual(signal_2.start, 9)
+        self.assertEqual(signal_2.length, 4)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'little_endian')
+        self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, 0)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 0)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, None)
+        self.assertEqual(signal_2.choices, {})
+        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = db.messages[0].signals[3]
+        self.assertEqual(signal_3.name, 'Signed')
+        self.assertEqual(signal_3.start, 13)
+        self.assertEqual(signal_3.length, 3)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'little_endian')
+        self.assertEqual(signal_3.is_signed, True)
+        self.assertEqual(signal_3.is_float, False)
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 0)
+        self.assertEqual(signal_3.minimum, None)
+        self.assertEqual(signal_3.maximum, None)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, None)
+        self.assertEqual(signal_3.decimal.maximum, None)
+        self.assertEqual(signal_3.unit, None)
+        self.assertEqual(signal_3.choices, None)
+        self.assertEqual(signal_3.comment, None)
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+        signal_4 = db.messages[0].signals[4]
+        self.assertEqual(signal_4.name, 'String')
+        self.assertEqual(signal_4.start, 16)
+        self.assertEqual(signal_4.length, 16)
+        self.assertEqual(signal_4.receivers, [])
+        self.assertEqual(signal_4.byte_order, 'little_endian')
+        self.assertEqual(signal_4.is_signed, False)
+        self.assertEqual(signal_4.is_float, False)
+        self.assertEqual(signal_4.scale, 1)
+        self.assertEqual(signal_4.offset, 0)
+        self.assertEqual(signal_4.minimum, None)
+        self.assertEqual(signal_4.maximum, None)
+        self.assertEqual(signal_4.decimal.scale, 1)
+        self.assertEqual(signal_4.decimal.offset, 0)
+        self.assertEqual(signal_4.decimal.minimum, None)
+        self.assertEqual(signal_4.decimal.maximum, None)
+        self.assertEqual(signal_4.unit, None)
+        self.assertEqual(signal_4.choices, None)
+        self.assertEqual(signal_4.comment, None)
+        self.assertEqual(signal_4.is_multiplexer, False)
+        self.assertEqual(signal_4.multiplexer_ids, None)
+
+        signal_5 = db.messages[0].signals[5]
+        self.assertEqual(signal_5.name, 'Raw')
+        self.assertEqual(signal_5.start, 32)
+        self.assertEqual(signal_5.length, 16)
+        self.assertEqual(signal_5.receivers, [])
+        self.assertEqual(signal_5.byte_order, 'little_endian')
+        self.assertEqual(signal_5.is_signed, False)
+        self.assertEqual(signal_5.is_float, False)
+        self.assertEqual(signal_5.scale, 1)
+        self.assertEqual(signal_5.offset, 0)
+        self.assertEqual(signal_5.minimum, None)
+        self.assertEqual(signal_5.maximum, None)
+        self.assertEqual(signal_5.decimal.scale, 1)
+        self.assertEqual(signal_5.decimal.offset, 0)
+        self.assertEqual(signal_5.decimal.minimum, None)
+        self.assertEqual(signal_5.decimal.maximum, None)
+        self.assertEqual(signal_5.unit, None)
+        self.assertEqual(signal_5.choices, None)
+        self.assertEqual(signal_5.comment, None)
+        self.assertEqual(signal_5.is_multiplexer, False)
+        self.assertEqual(signal_5.multiplexer_ids, None)
+
+        signal_6 = db.messages[0].signals[6]
+        self.assertEqual(signal_6.name, 'Unsigned')
+        self.assertEqual(signal_6.start, 48)
+        self.assertEqual(signal_6.length, 2)
+        self.assertEqual(signal_6.receivers, [])
+        self.assertEqual(signal_6.byte_order, 'little_endian')
+        self.assertEqual(signal_6.is_signed, False)
+        self.assertEqual(signal_6.is_float, False)
+        self.assertEqual(signal_6.scale, 1)
+        self.assertEqual(signal_6.offset, 0)
+        self.assertEqual(signal_6.minimum, None)
+        self.assertEqual(signal_6.maximum, None)
+        self.assertEqual(signal_6.decimal.scale, 1)
+        self.assertEqual(signal_6.decimal.offset, 0)
+        self.assertEqual(signal_6.decimal.minimum, None)
+        self.assertEqual(signal_6.decimal.maximum, None)
+        self.assertEqual(signal_6.unit, None)
+        self.assertEqual(signal_6.choices, None)
+        self.assertEqual(signal_6.comment, None)
+        self.assertEqual(signal_6.is_multiplexer, False)
+        self.assertEqual(signal_6.multiplexer_ids, None)
+
+        signal_7 = db.messages[0].signals[7]
+        self.assertEqual(signal_7.name, 'Enum2')
+        self.assertEqual(signal_7.start, 50)
+        self.assertEqual(signal_7.length, 3)
+        self.assertEqual(signal_7.receivers, [])
+        self.assertEqual(signal_7.byte_order, 'little_endian')
+        self.assertEqual(signal_7.is_signed, False)
+        self.assertEqual(signal_7.is_float, False)
+        self.assertEqual(signal_7.scale, 1)
+        self.assertEqual(signal_7.offset, 0)
+        self.assertEqual(signal_7.minimum, None)
+        self.assertEqual(signal_7.maximum, None)
+        self.assertEqual(signal_7.decimal.scale, 1)
+        self.assertEqual(signal_7.decimal.offset, 0)
+        self.assertEqual(signal_7.decimal.minimum, None)
+        self.assertEqual(signal_7.decimal.maximum, None)
+        self.assertEqual(signal_7.unit, None)
+        self.assertEqual(signal_7.choices, None)
+        self.assertEqual(signal_7.comment, None)
+        self.assertEqual(signal_7.is_multiplexer, False)
+        self.assertEqual(signal_7.multiplexer_ids, None)
+
+    def test_variables_color_enum_6_0_sym(self):
+        db = cantools.database.load_file(
+            'tests/files/sym/variables-color-enum-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+
+        signal_0 = db.messages[0].signals[0]
+        self.assertEqual(signal_0.name, 'Enum')
+        self.assertEqual(signal_0.start, 5)
+        self.assertEqual(signal_0.length, 8)
+        self.assertEqual(signal_0.receivers, [])
+        self.assertEqual(signal_0.byte_order, 'big_endian')
+        self.assertEqual(signal_0.is_signed, False)
+        self.assertEqual(signal_0.is_float, False)
+        self.assertEqual(signal_0.scale, 1)
+        self.assertEqual(signal_0.offset, 0)
+        self.assertEqual(signal_0.minimum, None)
+        self.assertEqual(signal_0.maximum, None)
+        self.assertEqual(signal_0.decimal.scale, 1)
+        self.assertEqual(signal_0.decimal.offset, 0)
+        self.assertEqual(signal_0.decimal.minimum, None)
+        self.assertEqual(signal_0.decimal.maximum, None)
+        self.assertEqual(signal_0.unit, None)
+        self.assertEqual(signal_0.choices, {0: 'Foo'})
+        self.assertEqual(signal_0.comment, None)
+        self.assertEqual(signal_0.is_multiplexer, False)
+        self.assertEqual(signal_0.multiplexer_ids, None)
+
+        signal_1 = db.messages[0].signals[1]
+        self.assertEqual(signal_1.name, 'Variable2')
+        self.assertEqual(signal_1.start, 11)
+        self.assertEqual(signal_1.length, 10)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'big_endian')
+        self.assertEqual(signal_1.is_signed, True)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, {0: 'Foo'})
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = db.messages[0].signals[2]
+        self.assertEqual(signal_2.name, 'Variable1')
+        self.assertEqual(signal_2.start, 12)
+        self.assertEqual(signal_2.length, 1)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'little_endian')
+        self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, 0)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 0)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, None)
+        self.assertEqual(signal_2.choices, {})
+        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = db.messages[0].signals[3]
+        self.assertEqual(signal_3.name, 'Color')
+        self.assertEqual(signal_3.start, 17)
+        self.assertEqual(signal_3.length, 32)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'big_endian')
+        self.assertEqual(signal_3.is_signed, False)
+        self.assertEqual(signal_3.is_float, True)
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 2)
+        self.assertEqual(signal_3.minimum, None)
+        self.assertEqual(signal_3.maximum, None)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 2)
+        self.assertEqual(signal_3.decimal.minimum, None)
+        self.assertEqual(signal_3.decimal.maximum, None)
+        self.assertEqual(signal_3.unit, 'A')
+        self.assertEqual(signal_3.choices, None)
+        self.assertEqual(signal_3.comment, None)
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+    def test_empty_enum_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/empty-enum-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+
+        signal_0 = db.messages[0].signals[0]
+        self.assertEqual(signal_0.name, 'Signal1')
+        self.assertEqual(signal_0.choices, {})
+
+    def test_special_chars_6_0_sym(self):
+        db = cantools.database.load_file('tests/files/sym/special-chars-6.0.sym')
+
+        self.assertEqual(db.version, '6.0')
+        self.assertEqual(len(db.messages), 1)
+
+        message = db.messages[0]
+        self.assertEqual(message.frame_id, 1)
+        self.assertEqual(message.is_extended_frame, False)
+        self.assertEqual(message.name, 'A/=*')
+        self.assertEqual(message.length, 8)
+        self.assertEqual(message.senders, [])
+        self.assertEqual(message.send_type, None)
+        self.assertEqual(message.cycle_time, 5)
+        self.assertEqual(len(message.signals), 6)
+        self.assertEqual(message.comment, 'dd')
+        self.assertEqual(message.bus_name, None)
+        self.assertEqual(message.is_multiplexed(), False)
+
+        signal_0 = message.signals[0]
+        self.assertEqual(signal_0.name, 'A B')
+        self.assertEqual(signal_0.start, 0)
+        self.assertEqual(signal_0.length, 8)
+        self.assertEqual(signal_0.receivers, [])
+        self.assertEqual(signal_0.byte_order, 'little_endian')
+        self.assertEqual(signal_0.is_signed, False)
+        self.assertEqual(signal_0.is_float, False)
+        self.assertEqual(signal_0.scale, 1)
+        self.assertEqual(signal_0.offset, 0)
+        self.assertEqual(signal_0.minimum, None)
+        self.assertEqual(signal_0.maximum, None)
+        self.assertEqual(signal_0.decimal.scale, 1)
+        self.assertEqual(signal_0.decimal.offset, 0)
+        self.assertEqual(signal_0.decimal.minimum, None)
+        self.assertEqual(signal_0.decimal.maximum, None)
+        self.assertEqual(signal_0.unit, 'A B')
+        self.assertEqual(signal_0.choices, None)
+        self.assertEqual(signal_0.comment, 'A B')
+        self.assertEqual(signal_0.is_multiplexer, False)
+        self.assertEqual(signal_0.multiplexer_ids, None)
+
+        signal_1 = message.signals[1]
+        self.assertEqual(signal_1.name, 'S/')
+        self.assertEqual(signal_1.start, 15)
+        self.assertEqual(signal_1.length, 8)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'big_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, '/')
+        self.assertEqual(signal_1.choices, None)
+        self.assertEqual(signal_1.comment, '/')
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = message.signals[2]
+        self.assertEqual(signal_2.name, 'S=')
+        self.assertEqual(signal_2.start, 23)
+        self.assertEqual(signal_2.length, 8)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'big_endian')
+        self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, -55)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, -55)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, '=')
+        self.assertEqual(signal_2.choices, None)
+        self.assertEqual(signal_2.comment, '=')
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = message.signals[3]
+        self.assertEqual(signal_3.name, 'S{SEND}')
+        self.assertEqual(signal_3.start, 24)
+        self.assertEqual(signal_3.length, 8)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'little_endian')
+        self.assertEqual(signal_3.is_signed, False)
+        self.assertEqual(signal_3.is_float, False)
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 0)
+        self.assertEqual(signal_3.minimum, None)
+        self.assertEqual(signal_3.maximum, None)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, None)
+        self.assertEqual(signal_3.decimal.maximum, None)
+        self.assertEqual(signal_3.unit, '{SEND}')
+        self.assertEqual(signal_3.choices, None)
+        self.assertEqual(signal_3.comment, ']')
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+        signal_4 = message.signals[4]
+        self.assertEqual(signal_4.name, 'a/b')
+        self.assertEqual(signal_4.start, 32)
+        self.assertEqual(signal_4.length, 8)
+        self.assertEqual(signal_4.receivers, [])
+        self.assertEqual(signal_4.byte_order, 'little_endian')
+        self.assertEqual(signal_4.is_signed, False)
+        self.assertEqual(signal_4.is_float, False)
+        self.assertEqual(signal_4.scale, 1)
+        self.assertEqual(signal_4.offset, 0)
+        self.assertEqual(signal_4.minimum, None)
+        self.assertEqual(signal_4.maximum, None)
+        self.assertEqual(signal_4.decimal.scale, 1)
+        self.assertEqual(signal_4.decimal.offset, 0)
+        self.assertEqual(signal_4.decimal.minimum, None)
+        self.assertEqual(signal_4.decimal.maximum, None)
+        self.assertEqual(signal_4.unit, '][')
+        self.assertEqual(signal_4.choices, None)
+        self.assertEqual(signal_4.comment, 'ö')
+
+        self.assertEqual(signal_4.is_multiplexer, False)
+        self.assertEqual(signal_4.multiplexer_ids, None)
+
+        signal_5 = message.signals[5]
+        self.assertEqual(signal_5.name, 'Variable1')
+        self.assertEqual(signal_5.start, 40)
+        self.assertEqual(signal_5.length, 1)
+        self.assertEqual(signal_5.receivers, [])
+        self.assertEqual(signal_5.byte_order, 'little_endian')
+        self.assertEqual(signal_5.is_signed, False)
+        self.assertEqual(signal_5.is_float, False)
+        self.assertEqual(signal_5.scale, 1)
+        self.assertEqual(signal_5.offset, 0)
+        self.assertEqual(signal_5.minimum, 0)
+        self.assertEqual(signal_5.maximum, 1)
+        self.assertEqual(signal_5.decimal.scale, 1)
+        self.assertEqual(signal_5.decimal.offset, 0)
+        self.assertEqual(signal_5.decimal.minimum, 0)
+        self.assertEqual(signal_5.decimal.maximum, 1)
+        self.assertEqual(signal_5.unit, 'm/s')
+        self.assertEqual(signal_5.choices, None)
+        self.assertEqual(signal_5.comment, 'comment')
+        self.assertEqual(signal_5.is_multiplexer, False)
+        self.assertEqual(signal_5.multiplexer_ids, None)
+
     def test_add_bad_sym_string(self):
         db = cantools.db.Database()
 
-        with self.assertRaises(cantools.db.ParseError) as cm:
+        with self.assertRaises(textparser.ParseError) as cm:
             db.add_sym_string('FormatVersion=6.0\n'
                               'Foo="Jopp"')
 
         self.assertEqual(
             str(cm.exception),
-            'Invalid SYM syntax at line 2, column 1: \'>!<Foo="Jopp"\': '
-            'Expected "Title".')
+            'Invalid syntax at line 2, column 1: ">>!<<Foo="Jopp""')
+
+    def test_multiplexed_variables_sym(self):
+        db = cantools.db.Database()
+        db.add_sym_file('tests/files/sym/multiplexed_variables.sym')
+        message = db.get_message_by_name('TestAlert')
+        self.assertEqual(message.signal_tree,
+                         [
+                             {
+                                 'FSM': {
+                                     1: [
+                                         'alert1', 'alert2', 'alert3'
+                                     ],
+                                     2: [
+                                         'alert4', 'alert5', 'alert6'
+                                     ]
+                                 }
+                             }
+                         ])
 
     def test_load_bad_format(self):
         with self.assertRaises(cantools.db.UnsupportedDatabaseFormatError):
@@ -1550,7 +2037,7 @@ IO_DEBUG(
             cantools.database.can.formats.utils.num('x')
 
     def test_timing(self):
-        filename = os.path.join('tests', 'files', 'timing.dbc')
+        filename = 'tests/files/dbc/timing.dbc'
         db = cantools.db.load_file(filename)
 
         # Message cycle time is 200, as given by BA_.
@@ -1563,12 +2050,10 @@ IO_DEBUG(
         self.assertEqual(message.cycle_time, 0)
         self.assertEqual(message.send_type, 'NoMsgSendType')
 
-        with open(filename, 'rb') as fin:
-            self.assertEqual(db.as_dbc_string().encode('ascii'), fin.read())
+        self.assert_dbc_dump(db, filename)
 
     def test_multiplex(self):
-        filename = os.path.join('tests', 'files', 'multiplex.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/multiplex.dbc')
 
         message_1 = db.messages[0]
         self.assertTrue(message_1.is_multiplexed())
@@ -1663,9 +2148,10 @@ IO_DEBUG(
             decoded = message_1.decode(encoded)
             self.assertEqual(decoded, decoded_message)
 
+        self.assert_dbc_dump(db, 'tests/files/dbc/multiplex_dumped.dbc')
+
     def test_multiplex_choices(self):
-        filename = os.path.join('tests', 'files', 'multiplex_choices.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/multiplex_choices.dbc')
 
         # With Multiplexor and BIT_L as strings.
         decoded_message = {
@@ -1694,6 +2180,19 @@ IO_DEBUG(
         self.assertEqual(encoded, encoded_message)
         decoded = message_1.decode(encoded, decode_choices=False)
         self.assertEqual(decoded, decoded_message)
+
+        self.assertEqual(
+            message_1.signal_choices_string(),
+            '\n'
+            'Multiplexor\n'
+            '    8 MULTIPLEXOR_8\n'
+            '    16 MULTIPLEXOR_16\n'
+            '    24 MULTIPLEXOR_24\n'
+            '\n'
+            'BIT_L\n'
+            '    0 Off\n'
+            '    1 On'
+        )
 
         # With Multiplexor as the only signal.
         decoded_message = {
@@ -1755,6 +2254,87 @@ IO_DEBUG(
             '           +-- BIT_B\n'
             '           +-- BIT_H\n'
             '           +-- BIT_F')
+
+        self.assert_dbc_dump(db, 'tests/files/dbc/multiplex_choices_dumped.dbc')
+
+    def test_multiplex_2(self):
+        db = cantools.db.load_file('tests/files/dbc/multiplex_2.dbc')
+
+        # Shared.
+        message = db.messages[0]
+        self.assertEqual(message.signal_tree,
+                         [
+                             {
+                                 'S0': {
+                                     1: ['S1'],
+                                     2: ['S2'],
+                                     3: ['S1', 'S2'],
+                                     4: ['S2'],
+                                     5: ['S2']
+                                 }
+                             }
+                         ])
+
+        # Normal.
+        message = db.messages[1]
+        self.assertEqual(message.signal_tree,
+                         [
+                             {
+                                 'S0': {
+                                     0: ['S1'],
+                                     1: ['S2']
+                                 }
+                             }
+                         ])
+
+        # Extended.
+        message = db.messages[2]
+        self.assertEqual(message.signal_tree,
+                         [
+                             {
+                                 'S0': {
+                                     0: [
+                                         {
+                                             'S1': {
+                                                 0: ['S2', 'S3'],
+                                                 2: ['S4']
+                                             }
+                                         }
+                                     ],
+                                     1: ['S5']
+                                 }
+                             },
+                             {
+                                 'S6': {
+                                     1: ['S7'],
+                                     2: ['S8']
+                                 }
+                             }
+                         ])
+
+        # Extended types.
+        message = db.messages[3]
+        self.assertEqual(message.signal_tree,
+                         [
+                             {
+                                 'S11': {
+                                     3: [
+                                         {
+                                             'S0': {
+                                                 0: [
+                                                     'S10'
+                                                 ]
+                                             }
+                                         }
+                                     ],
+                                     5: [
+                                         'S9'
+                                     ]
+                                 }
+                             }
+                         ])
+
+        self.assert_dbc_dump(db, 'tests/files/dbc/multiplex_2_dumped.dbc')
 
     def test_multiplex_extended(self):
         #            tree              |  bits
@@ -1868,8 +2448,7 @@ IO_DEBUG(
             '       +-- 1\n'
             '       |   +-- S7\n'
             '       +-- 2\n'
-            '           +-- S8'
-        )
+            '           +-- S8')
 
         # Encode and decode a few messages with different
         # multiplexing.
@@ -1897,7 +2476,7 @@ IO_DEBUG(
     def test_dbc_parse_error_messages(self):
         # No valid entry.
         with self.assertRaises(textparser.ParseError) as cm:
-            cantools.db.formats.dbc.load_string('abc')
+            dbc.load_string('abc')
 
         self.assertEqual(
             str(cm.exception),
@@ -1905,9 +2484,8 @@ IO_DEBUG(
 
         # Bad message frame id.
         with self.assertRaises(textparser.ParseError) as cm:
-            cantools.db.formats.dbc.load_string(
-                'VERSION "1.0"\n'
-                'BO_ dssd\n')
+            dbc.load_string('VERSION "1.0"\n'
+                            'BO_ dssd\n')
 
         self.assertEqual(
             str(cm.exception),
@@ -1915,9 +2493,8 @@ IO_DEBUG(
 
         # Bad entry key.
         with self.assertRaises(textparser.ParseError) as cm:
-            cantools.db.formats.dbc.load_string(
-                'VERSION "1.0"\n'
-                'dd\n')
+            dbc.load_string('VERSION "1.0"\n'
+                            'dd\n')
 
         self.assertEqual(
             str(cm.exception),
@@ -1925,9 +2502,8 @@ IO_DEBUG(
 
         # Missing colon in message.
         with self.assertRaises(textparser.ParseError) as cm:
-            cantools.db.formats.dbc.load_string(
-                'VERSION "1.0"\n'
-                'BO_ 546 EMV_Stati 8 EMV_Statusmeldungen\n')
+            dbc.load_string('VERSION "1.0"\n'
+                            'BO_ 546 EMV_Stati 8 EMV_Statusmeldungen\n')
 
         self.assertEqual(
             str(cm.exception),
@@ -1936,7 +2512,7 @@ IO_DEBUG(
 
         # Missing frame id in message comment.
         with self.assertRaises(textparser.ParseError) as cm:
-            cantools.db.formats.dbc.load_string('CM_ BO_ "Foo.";')
+            dbc.load_string('CM_ BO_ "Foo.";')
 
         self.assertEqual(
             str(cm.exception),
@@ -1948,14 +2524,13 @@ IO_DEBUG(
 
         self.assertEqual(
             str(cm.exception),
-            "DBC: \"Invalid syntax at line 1, column 9: \"CM_ BO_ >>!<<\"Foo."
-            "\";\"\", KCD: \"syntax error: line 1, column 0\", SYM: \"Only SYM "
-            "version 6.0 is supported.\", CDD: \"syntax error: line 1, column "
-            "0\"")
+            "ARXML: \"syntax error: line 1, column 0\", DBC: \"Invalid syntax "
+            "at line 1, column 9: \"CM_ BO_ >>!<<\"Foo.\";\"\", KCD: \"syntax "
+            "error: line 1, column 0\", SYM: \"Only SYM version 6.0 is "
+            "supported.\", CDD: \"syntax error: line 1, column 0\"")
 
     def test_get_node_by_name(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
 
         self.assertIs(db.get_node_by_name('Motor alternative supplier'),
                       db.nodes[1])
@@ -1966,8 +2541,7 @@ IO_DEBUG(
         self.assertEqual(str(cm.exception), "'Missing'")
 
     def test_get_bus_by_name(self):
-        filename = os.path.join('tests', 'files', 'the_homer.kcd')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/kcd/the_homer.kcd')
 
         self.assertIs(db.get_bus_by_name('Comfort'), db.buses[2])
 
@@ -1977,9 +2551,9 @@ IO_DEBUG(
         self.assertEqual(str(cm.exception), "'Missing'")
 
     def test_load_file_with_database_format(self):
-        filename_dbc = os.path.join('tests', 'files', 'foobar.dbc')
-        filename_kcd = os.path.join('tests', 'files', 'the_homer.kcd')
-        filename_sym = os.path.join('tests', 'files', 'jopp-6.0.sym')
+        filename_dbc = 'tests/files/dbc/foobar.dbc'
+        filename_kcd = 'tests/files/kcd/the_homer.kcd'
+        filename_sym = 'tests/files/sym/jopp-6.0.sym'
 
         # Matching file contents and database format.
         cantools.db.load_file(filename_dbc, database_format=None)
@@ -2017,8 +2591,24 @@ IO_DEBUG(
 
         self.assertEqual(
             str(cm.exception),
-            "expected database format 'dbc', 'kcd', 'sym', 'cdd' or None, but "
-            "got 'bad'")
+            "expected database format 'arxml', 'dbc', 'kcd', 'sym', 'cdd' or "
+            "None, but got 'bad'")
+
+    def test_load_file_encoding(self):
+        # Override default encoding.
+        #
+        # Does not fail to load using UTF-8 encoding because encoding
+        # errors are replaced (fopen(errors='replace')).
+        db = cantools.database.load_file('tests/files/dbc/cp1252.dbc',
+                                         encoding='utf-8')
+
+        replaced = 123 * b'\xef\xbf\xbd'.decode('utf-8')
+
+        self.assertEqual(
+            db.nodes[0].comment,
+            r" !#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTU"
+            r"VWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+            + replaced)
 
     def test_performance_big_endian_signals(self):
         """Test encode/decode performance of a frame with big endian signals.
@@ -2106,8 +2696,7 @@ IO_DEBUG(
 
         """
 
-        filename = os.path.join('tests', 'files', 'multiplex_choices.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/multiplex_choices.dbc')
 
         decoded_message = {
             'Multiplexor': 'MULTIPLEXOR_8',
@@ -2132,8 +2721,7 @@ IO_DEBUG(
 
         """
 
-        filename = os.path.join('tests', 'files', 'multiplex_choices.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/multiplex_choices.dbc')
 
         message_1 = db.messages[0]
 
@@ -2168,8 +2756,7 @@ IO_DEBUG(
                          'expected multiplexer id 8, but got 7')
 
     def test_multiplex_dump(self):
-        filename = os.path.join('tests', 'files', 'test_multiplex_dump.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/test_multiplex_dump.dbc')
         dumped_db = cantools.db.load_string(db.as_dbc_string())
         dumped_msg = dumped_db.get_message_by_frame_id(0x100)
 
@@ -2184,16 +2771,14 @@ IO_DEBUG(
         self.assertEqual(dumped_msg.signals[2].is_multiplexer, False)
 
     def test_string_attribute_definition_dump(self):
-        filename = os.path.join('tests', 'files', 'test_multiplex_dump.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/test_multiplex_dump.dbc')
         dumped_db = cantools.db.load_string(db.as_dbc_string())
         attribute = dumped_db.dbc.attribute_definitions
 
         self.assertEqual(attribute['BusType'].type_name, "STRING")
 
     def test_extended_id_dump(self):
-        filename = os.path.join('tests', 'files', 'test_extended_id_dump.dbc')
-        db = cantools.db.load_file(filename)
+        db = cantools.db.load_file('tests/files/dbc/test_extended_id_dump.dbc')
         dumped_db = cantools.db.load_string(db.as_dbc_string())
         reg_id_msg = dumped_db.get_message_by_frame_id(0x100)
         ext_id_msg = dumped_db.get_message_by_frame_id(0x1c2a2a2a)
@@ -2202,7 +2787,7 @@ IO_DEBUG(
         self.assertEqual(ext_id_msg.is_extended_frame, True)
 
     def test_attributes(self):
-        filename = os.path.join('tests', 'files', 'attributes.dbc')
+        filename = 'tests/files/dbc/attributes.dbc'
 
         with open(filename, 'r') as fin:
             db = cantools.db.load(fin)
@@ -2327,13 +2912,30 @@ IO_DEBUG(
         self.assertEqual(message.cycle_time, 1000)
         self.assertEqual(message.send_type, 'Cyclic')
 
-        with open(filename, 'rb') as fin:
-            self.assertEqual(db.as_dbc_string().encode('ascii'), fin.read())
+        self.assert_dbc_dump(db, filename)
 
-    def test_setters(self):
-        filename = os.path.join('tests', 'files', 'attributes.dbc')
+    def test_big_numbers(self):
+        filename = 'tests/files/dbc/big_numbers.dbc'
 
         with open(filename, 'r') as fin:
+            db = cantools.db.load(fin)
+
+        # Node attributes.
+        node = db.nodes[0]
+        attribute = node.dbc.attributes['TheNodeAttribute']
+        self.assertEqual(attribute.name, 'TheNodeAttribute')
+        self.assertEqual(attribute.value, 99)
+        self.assertEqual(attribute.definition,
+                         db.dbc.attribute_definitions['TheNodeAttribute'])
+        self.assertEqual(attribute.definition.default_value, 100)
+        self.assertEqual(attribute.definition.kind, 'BU_')
+        self.assertEqual(attribute.definition.type_name, 'INT')
+        self.assertEqual(attribute.definition.minimum, -9223372036854780000)
+        self.assertEqual(attribute.definition.maximum, 18446744073709600000)
+        self.assertEqual(attribute.definition.choices, None)
+
+    def test_setters(self):
+        with open('tests/files/dbc/attributes.dbc', 'r') as fin:
             db = cantools.db.load(fin)
 
         # Calling the setters for coverage. Assertions are not
@@ -2357,15 +2959,18 @@ IO_DEBUG(
         db.messages[0].signals[0].offset = 1
         db.messages[0].signals[0].minimum = 0
         db.messages[0].signals[0].maximum = 100
+        db.messages[0].signals[0].decimal.scale = Decimal(10)
+        db.messages[0].signals[0].decimal.offset = Decimal(1)
+        db.messages[0].signals[0].decimal.minimum = Decimal(0)
+        db.messages[0].signals[0].decimal.maximum = Decimal(100)
         db.messages[0].signals[0].unit = 'TheNewUnit'
         db.messages[0].signals[0].is_multiplexer = True
         db.messages[0].signals[0].multiplexer_signal = db.messages[0].signals[0]
         db.messages[0].signals[0].comment = 'TheNewComment'
+        db.messages[0].signals[0].spn = 500
 
     def test_refresh(self):
-        filename = os.path.join('tests', 'files', 'attributes.dbc')
-
-        with open(filename, 'r') as fin:
+        with open('tests/files/dbc/attributes.dbc', 'r') as fin:
             db = cantools.db.load(fin)
 
         message = db.get_message_by_frame_id(0x39)
@@ -2710,9 +3315,9 @@ IO_DEBUG(
 
     def test_strict_load(self):
         filenames = [
-            os.path.join('tests', 'files', 'bad_message_length.kcd'),
-            os.path.join('tests', 'files', 'bad_message_length.dbc'),
-            os.path.join('tests', 'files', 'bad_message_length.sym')
+            'tests/files/kcd/bad_message_length.kcd',
+            'tests/files/dbc/bad_message_length.dbc',
+            'tests/files/sym/bad_message_length.sym'
         ]
 
         for filename in filenames:
@@ -2751,8 +3356,8 @@ IO_DEBUG(
                          'The signal S does not fit in message M.')
 
     def test_message_layout(self):
-        filename = os.path.join('tests', 'files', 'message_layout.kcd')
-        db = cantools.database.load_file(filename, strict=False)
+        db = cantools.database.load_file('tests/files/kcd/message_layout.kcd',
+                                         strict=False)
 
         # Message 1.
         expected_lines = [
@@ -2967,8 +3572,8 @@ IO_DEBUG(
         self.assertEqual(actual, '\n'.join(expected_lines))
 
     def test_message_layout_without_signal_names(self):
-        filename = os.path.join('tests', 'files', 'message_layout.kcd')
-        db = cantools.database.load_file(filename, strict=False)
+        db = cantools.database.load_file('tests/files/kcd/message_layout.kcd',
+                                         strict=False)
 
         # Message 1.
         expected_lines = [
@@ -3177,14 +3782,12 @@ IO_DEBUG(
 
         db = cantools.database.Database()
 
-        filename = os.path.join('tests', 'files', 'add_two_dbc_files_1.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/add_two_dbc_files_1.dbc')
         self.assertEqual(len(db.messages), 2)
         self.assertEqual(db.get_message_by_name('M1').frame_id, 1)
         self.assertEqual(db.get_message_by_frame_id(2).name, 'M2')
 
-        filename = os.path.join('tests', 'files', 'add_two_dbc_files_2.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/add_two_dbc_files_2.dbc')
         self.assertEqual(len(db.messages), 3)
         self.assertEqual(db.get_message_by_name('M1').frame_id, 2)
         self.assertEqual(db.get_message_by_frame_id(2).name, 'M1')
@@ -3196,8 +3799,7 @@ IO_DEBUG(
 
         db = cantools.database.Database()
 
-        filename = os.path.join('tests', 'files', 'empty_ns.dbc')
-        db.add_dbc_file(filename)
+        db.add_dbc_file('tests/files/dbc/empty_ns.dbc')
         self.assertEqual(len(db.nodes), 0)
 
     def test_as_kcd_string(self):
@@ -3205,11 +3807,1153 @@ IO_DEBUG(
 
         """
 
-        filename = os.path.join('tests', 'files', 'dump.kcd')
+        if sys.version_info < (3, 8):
+            return
+
+        filename = 'tests/files/kcd/dump.kcd'
         db = cantools.database.load_file(filename)
 
-        with open(filename, 'rb') as fin:
-            self.assertEqual(db.as_kcd_string().encode('ascii'), fin.read())
+        with open(filename, 'r') as fin:
+            self.assertEqual(db.as_kcd_string(), fin.read())
+
+    def test_issue_62(self):
+        """Test issue 62.
+
+        """
+
+        db = cantools.database.load_file('tests/files/dbc/issue_62.dbc')
+        self.assertEqual(len(db.messages), 0)
+
+    def test_issue_63(self):
+        """Test issue 63.
+
+        """
+
+        filename = 'tests/files/dbc/issue_63.dbc'
+
+        with self.assertRaises(cantools.database.errors.Error) as cm:
+            cantools.database.load_file(filename)
+
+        self.assertEqual(
+            str(cm.exception),
+            'The signals HtrRes and MaxRes are overlapping in message '
+            'AFT1PSI2.')
+
+        db = cantools.database.load_file(filename, strict=False)
+        self.assertEqual(
+            db.messages[0].layout_string(),
+            '                      Bit\n'
+            '\n'
+            '         7   6   5   4   3   2   1   0\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     0 |   |   |<-----x|<-------------x|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '                 |       +-- DetectionStatus\n'
+            '                 +-- PwrSupply\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     1 |<-----------------------------x|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '         +-- RegenFailedCount\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     2 |------------------------------x|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            ' B   3 |<------------------------------|\n'
+            ' y     +---+---+---+---+---+---+---+---+\n'
+            ' t       +-- Temp\n'
+            ' e     +---+---+---+---+---+---+---+---+\n'
+            '     4 |------------------------------x|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     5 |XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '         +-- MaxRes\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     6 |<------------------------------|\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '         +-- HtrRes\n'
+            '       +---+---+---+---+---+---+---+---+\n'
+            '     7 |   |   |   |   |   |   |   |   |\n'
+            '       +---+---+---+---+---+---+---+---+')
+
+    def test_j1939_dbc(self):
+        db = cantools.database.load_file('tests/files/dbc/j1939.dbc')
+
+        self.assertEqual(db.messages[0].name, 'Message1')
+        self.assertEqual(db.messages[0].frame_id, 0x15340201)
+        self.assertEqual(db.messages[0].protocol, 'j1939')
+
+        signal = db.messages[0].signals[0]
+        self.assertEqual(signal.spn, 500)
+
+        signal = db.messages[1].signals[0]
+        self.assertEqual(signal.spn, None)
+
+    def test_j1939_frame_id_pack_unpack(self):
+        Data = namedtuple('Data',
+                          [
+                              'priority',
+                              'reserved',
+                              'data_page',
+                              'pdu_format',
+                              'pdu_specific',
+                              'source_address',
+                              'packed'
+                          ])
+
+        datas = [
+            Data(priority=0x7,
+                 reserved=0x1,
+                 data_page=0x1,
+                 pdu_format=0xff,
+                 pdu_specific=0xff,
+                 source_address=0xff,
+                 packed=0x1fffffff),
+            Data(priority=0x5,
+                 reserved=0x0,
+                 data_page=0x0,
+                 pdu_format=0x12,
+                 pdu_specific=0x34,
+                 source_address=0x56,
+                 packed=0x14123456)
+        ]
+
+        for data in datas:
+            packed = cantools.j1939.frame_id_pack(*data[:-1])
+            self.assertEqual(packed, data.packed)
+            unpacked = cantools.j1939.frame_id_unpack(packed)
+            self.assertEqual(unpacked, data[:-1])
+
+    def test_j1939_frame_id_pack_bad_data(self):
+        Data = namedtuple('Data',
+                          [
+                              'priority',
+                              'reserved',
+                              'data_page',
+                              'pdu_format',
+                              'pdu_specific',
+                              'source_address',
+                              'message'
+                          ])
+
+        datas = [
+            Data(priority=8,
+                 reserved=0,
+                 data_page=0,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 source_address=0,
+                 message='Expected priority 0..7, but got 8.'),
+            Data(priority=0,
+                 reserved=2,
+                 data_page=0,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 source_address=0,
+                 message='Expected reserved 0..1, but got 2.'),
+            Data(priority=0,
+                 reserved=0,
+                 data_page=2,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 source_address=0,
+                 message='Expected data page 0..1, but got 2.'),
+            Data(priority=0,
+                 reserved=0,
+                 data_page=0,
+                 pdu_format=0x100,
+                 pdu_specific=0,
+                 source_address=0,
+                 message='Expected PDU format 0..255, but got 256.'),
+            Data(priority=0,
+                 reserved=0,
+                 data_page=0,
+                 pdu_format=0,
+                 pdu_specific=0x100,
+                 source_address=0,
+                 message='Expected PDU specific 0..255, but got 256.'),
+            Data(priority=0,
+                 reserved=0,
+                 data_page=0,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 source_address=256,
+                 message='Expected source address 0..255, but got 256.')
+        ]
+
+        for data in datas:
+            with self.assertRaises(cantools.Error) as cm:
+                cantools.j1939.frame_id_pack(*data[:-1])
+
+            self.assertEqual(str(cm.exception), data.message)
+
+    def test_j1939_frame_id_unpack_bad_data(self):
+        Data = namedtuple('Data', ['data', 'message'])
+
+        datas = [
+            Data(data=0x100000000,
+                 message=('Expected a frame id 0..0x1fffffff, but got '
+                          '0x100000000.'))
+        ]
+
+        for data in datas:
+            with self.assertRaises(cantools.Error) as cm:
+                cantools.j1939.frame_id_unpack(data.data)
+
+            self.assertEqual(str(cm.exception), data.message)
+
+    def test_j1939_pgn_pack_unpack(self):
+        Data = namedtuple('Data',
+                          [
+                              'reserved',
+                              'data_page',
+                              'pdu_format',
+                              'pdu_specific',
+                              'packed'
+                          ])
+
+        datas = [
+            Data(reserved=1,
+                 data_page=1,
+                 pdu_format=0xff,
+                 pdu_specific=0xff,
+                 packed=0x3ffff),
+            Data(reserved=0,
+                 data_page=1,
+                 pdu_format=0xef,
+                 pdu_specific=0,
+                 packed=0x1ef00),
+            Data(reserved=0,
+                 data_page=0,
+                 pdu_format=0xf0,
+                 pdu_specific=0x34,
+                 packed=0xf034)
+        ]
+
+        for data in datas:
+            packed = cantools.j1939.pgn_pack(*data[:4])
+            self.assertEqual(packed, data.packed)
+            unpacked = cantools.j1939.pgn_unpack(packed)
+            self.assertEqual(unpacked, data[:4])
+
+    def test_j1939_pgn_pack_bad_data(self):
+        Data = namedtuple('Data',
+                          [
+                              'reserved',
+                              'data_page',
+                              'pdu_format',
+                              'pdu_specific',
+                              'message'
+                          ])
+
+        datas = [
+            Data(reserved=2,
+                 data_page=0,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 message='Expected reserved 0..1, but got 2.'),
+            Data(reserved=0,
+                 data_page=2,
+                 pdu_format=0,
+                 pdu_specific=0,
+                 message='Expected data page 0..1, but got 2.'),
+            Data(reserved=0,
+                 data_page=0,
+                 pdu_format=0x100,
+                 pdu_specific=0,
+                 message='Expected PDU format 0..255, but got 256.'),
+            Data(reserved=0,
+                 data_page=0,
+                 pdu_format=0xf0,
+                 pdu_specific=0x100,
+                 message='Expected PDU specific 0..255, but got 256.'),
+            Data(reserved=0,
+                 data_page=0,
+                 pdu_format=0xef,
+                 pdu_specific=1,
+                 message=('Expected PDU specific 0 when PDU format is 0..239, '
+                          'but got 1.'))
+        ]
+
+        for data in datas:
+            with self.assertRaises(cantools.Error) as cm:
+                cantools.j1939.pgn_pack(*data[:4])
+
+            self.assertEqual(str(cm.exception), data.message)
+
+    def test_j1939_pgn_unpack_bad_data(self):
+        Data = namedtuple('Data', ['data', 'message'])
+
+        datas = [
+            Data(data=0x40000,
+                 message=('Expected a parameter group number 0..0x3ffff, '
+                          'but got 0x40000.'))
+        ]
+
+        for data in datas:
+            with self.assertRaises(cantools.Error) as cm:
+                cantools.j1939.pgn_unpack(data.data)
+
+            self.assertEqual(str(cm.exception), data.message)
+
+    def test_float_dbc(self):
+        filename = 'tests/files/dbc/floating_point.dbc'
+        db = cantools.database.load_file(filename)
+
+        # Double.
+        message = db.get_message_by_frame_id(1024)
+        signal = message.get_signal_by_name('Signal1')
+        self.assertEqual(signal.is_float, True)
+        self.assertEqual(signal.length, 64)
+
+        decoded_message = {'Signal1': -129.448}
+        encoded_message = b'\x75\x93\x18\x04\x56\x2e\x60\xc0'
+
+        encoded = message.encode(decoded_message)
+        self.assertEqual(encoded, encoded_message)
+        decoded = message.decode(encoded)
+        self.assertEqual(decoded, decoded_message)
+
+        # Float.
+        message = db.get_message_by_frame_id(1025)
+        signal = message.get_signal_by_name('Signal1')
+        self.assertEqual(signal.is_float, True)
+        self.assertEqual(signal.length, 32)
+
+        decoded_message = {
+            'Signal1': 129.5,
+            'Signal2': 1234500.5
+        }
+        encoded_message = b'\x00\x80\x01\x43\x24\xb2\x96\x49'
+
+        encoded = message.encode(decoded_message)
+        self.assertEqual(encoded, encoded_message)
+        decoded = message.decode(encoded)
+        self.assertEqual(decoded, decoded_message)
+
+        self.assert_dbc_dump(db, filename)
+
+    def test_signed_dbc(self):
+        db = cantools.database.load_file('tests/files/dbc/signed.dbc')
+
+        datas = [
+            (
+                'Message64',
+                {'s64': -5},
+                b'\xfb\xff\xff\xff\xff\xff\xff\xff'
+            ),
+            (
+                'Message33',
+                {'s33': -5},
+                b'\xfb\xff\xff\xff\x01\x00\x00\x00'
+            ),
+            (
+                'Message32',
+                {'s32': -5},
+                b'\xfb\xff\xff\xff\x00\x00\x00\x00'
+            ),
+            (
+                'Message64big',
+                {'s64big': -5},
+                b'\xff\xff\xff\xff\xff\xff\xff\xfb'
+            ),
+            (
+                'Message33big',
+                {'s33big': -5},
+                b'\xff\xff\xff\xfd\x80\x00\x00\x00'
+            ),
+            (
+                'Message32big',
+                {'s32big': -5},
+                b'\xff\xff\xff\xfb\x00\x00\x00\x00'
+            ),
+            (
+                'Message378910',
+                {
+                    's7': -40,
+                    's8big': 0x5a,
+                    's9': 0xa5,
+                    's8': -43,
+                    's3big': -4,
+                    's3': 1,
+                    's10big': -253,
+                    's7big': -9
+                },
+                b'\xb0\xb4\x4a\x55\x87\x01\x81\xf7'
+            )
+        ]
+
+        for name, decoded_message, encoded_message in datas:
+            encoded = db.encode_message(name, decoded_message)
+            self.assertEqual(encoded, encoded_message)
+            decoded = db.decode_message(name, encoded)
+            self.assertEqual(decoded, decoded_message)
+
+    def test_long_names_dbc(self):
+        db = cantools.database.load_file('tests/files/dbc/long_names.dbc')
+
+        # Nodes.
+        self.assertEqual(db.nodes[0].name, 'NN123456789012345678901234567890123')
+        self.assertEqual(db.nodes[1].name, 'N123456789012345678901234567890123')
+        self.assertEqual(db.nodes[2].name, 'N1234567890123456789012345678901')
+        self.assertEqual(db.nodes[3].name, 'N12345678901234567890123456789012')
+
+        # Messages.
+        self.assertEqual(db.messages[0].name, 'SS12345678901234567890123458789012345')
+        self.assertEqual(db.messages[1].name, 'SS1234567890123456789012345778901')
+        self.assertEqual(db.messages[2].name, 'SS1234567890123456789012345878901234')
+        self.assertEqual(db.messages[3].name, 'SS123456789012345678901234577890')
+        self.assertEqual(db.messages[4].name, 'SS12345678901234567890123456789012')
+        self.assertEqual(db.messages[5].name, 'S12345678901234567890123456789012')
+        self.assertEqual(db.messages[6].name, 'M123456789012345678901234567890123')
+        self.assertEqual(db.messages[7].name, 'M1234567890123456789012345678901')
+        self.assertEqual(db.messages[8].name, 'M12345678901234567890123456789012')
+        self.assertEqual(db.messages[9].name, 'MM12345678901234567890123456789012')
+
+        self.assertEqual(db.messages[7].senders, ['N1234567890123456789012345678901'])
+        self.assertEqual(db.messages[8].senders, ['N12345678901234567890123456789012'])
+
+        # Signals.
+        self.assertEqual(db.messages[5].signals[0].name,
+                         'SS12345678901234567890123456789012')
+        self.assertEqual(db.messages[6].signals[0].name,
+                         'SSS12345678901234567890123456789012')
+        self.assertEqual(db.messages[7].signals[0].name,
+                         'S1234567890123456789012345678901')
+        self.assertEqual(db.messages[7].signals[1].name,
+                         'S123456789012345678901234567890123')
+        self.assertEqual(db.messages[7].signals[2].name,
+                         'SS12345678901234567890123456789012')
+        self.assertEqual(db.messages[7].signals[3].name,
+                         'SS1234567890123456789012345678901233')
+        self.assertEqual(db.messages[7].signals[4].name,
+                         'SS12345678901234567890123456789012332')
+        self.assertEqual(db.messages[8].signals[0].name,
+                         'S123456789012345678901234567890123')
+        self.assertEqual(db.messages[8].signals[1].name,
+                         'S12345678901234567890123456789012')
+        self.assertEqual(db.messages[8].signals[2].name,
+                         'SS12345678901234567890123456789012')
+        self.assertEqual(db.messages[8].signals[3].name,
+                         'SS12345678901234567890123456789012dw')
+        self.assertEqual(db.messages[9].signals[0].name,
+                         'SS1234567890123456789012345678901233')
+        self.assertEqual(db.messages[9].signals[1].name,
+                         'SSS12345678901234567890123456789012')
+
+        self.assertEqual(db.messages[7].signals[2].receivers,
+                         ['N123456789012345678901234567890123'])
+
+        # environment variables
+        envvar_names = db.dbc.environment_variables
+        self.assertTrue('E1234567890123456789012345678901' in envvar_names)
+        self.assertFalse('E12345678901234567890123456_0000' in envvar_names)
+        self.assertTrue('E12345678901234567890123456789012' in envvar_names)
+
+    def test_system_arxml(self):
+        db = cantools.db.load_file('tests/files/arxml/system-4.2.arxml')
+
+        self.assertEqual(len(db.nodes), 0)
+
+        self.assertEqual(len(db.messages), 3)
+
+        message_1 = db.messages[0]
+        self.assertEqual(message_1.frame_id, 5)
+        self.assertEqual(message_1.is_extended_frame, False)
+        self.assertEqual(message_1.name, 'Message1')
+        self.assertEqual(message_1.length, 6)
+        self.assertEqual(message_1.senders, [])
+        self.assertEqual(message_1.send_type, None)
+        self.assertEqual(message_1.cycle_time, None)
+        self.assertEqual(len(message_1.signals), 3)
+        self.assertEqual(message_1.comment, 'Comment1')
+        self.assertEqual(message_1.bus_name, None)
+
+        signal_1 = message_1.signals[0]
+        self.assertEqual(signal_1.name, 'Signal6')
+        self.assertEqual(signal_1.start, 0)
+        self.assertEqual(signal_1.length, 1)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'little_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 0.1)
+        self.assertEqual(signal_1.offset, 0.0)
+        self.assertEqual(signal_1.minimum, 0)
+        self.assertEqual(signal_1.maximum, 1)
+        self.assertEqual(signal_1.decimal.scale, Decimal('0.1'))
+        self.assertEqual(signal_1.decimal.offset, 0.0)
+        self.assertEqual(signal_1.decimal.minimum, 0)
+        self.assertEqual(signal_1.decimal.maximum, 1)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, {'zero': 0})
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = message_1.signals[1]
+        self.assertEqual(signal_2.name, 'Signal1')
+        self.assertEqual(signal_2.start, 4)
+        self.assertEqual(signal_2.length, 3)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'big_endian')
+        self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 5.0)
+        self.assertEqual(signal_2.offset, 0.0)
+        self.assertEqual(signal_2.minimum, 0.0)
+        self.assertEqual(signal_2.maximum, 4.0)
+        self.assertEqual(signal_2.decimal.scale, 5.0)
+        self.assertEqual(signal_2.decimal.offset, 0.0)
+        self.assertEqual(signal_2.decimal.minimum, 0.0)
+        self.assertEqual(signal_2.decimal.maximum, 4.0)
+        self.assertEqual(signal_2.unit, 'm')
+        self.assertEqual(signal_2.choices, None)
+        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = message_1.signals[2]
+        self.assertEqual(signal_3.name, 'Signal5')
+        self.assertEqual(signal_3.start, 16)
+        self.assertEqual(signal_3.length, 32)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'little_endian')
+        self.assertEqual(signal_3.is_signed, False)
+        self.assertEqual(signal_3.is_float, True)
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 0)
+        self.assertEqual(signal_3.minimum, None)
+        self.assertEqual(signal_3.maximum, None)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, None)
+        self.assertEqual(signal_3.decimal.maximum, None)
+        self.assertEqual(signal_3.unit, None)
+        self.assertEqual(signal_3.choices, None)
+        self.assertEqual(signal_3.comment, None)
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+        message_2 = db.messages[1]
+        self.assertEqual(message_2.frame_id, 6)
+        self.assertEqual(message_2.is_extended_frame, True)
+        self.assertEqual(message_2.name, 'Message2')
+        self.assertEqual(message_2.length, 7)
+        self.assertEqual(message_2.senders, [])
+        self.assertEqual(message_2.send_type, None)
+        self.assertEqual(message_2.cycle_time, 200)
+        self.assertEqual(len(message_2.signals), 3)
+        self.assertEqual(message_2.comment, None)
+        self.assertEqual(message_2.bus_name, None)
+
+        signal_1 = message_2.signals[0]
+        self.assertEqual(signal_1.name, 'Signal3')
+        self.assertEqual(signal_1.start, 6)
+        self.assertEqual(signal_1.length, 2)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'little_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, None)
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = message_2.signals[1]
+        self.assertEqual(signal_2.name, 'Signal2')
+        self.assertEqual(signal_2.start, 18)
+        self.assertEqual(signal_2.length, 11)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'little_endian')
+        self.assertEqual(signal_2.is_signed, True)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, 0)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 0)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, None)
+        self.assertEqual(signal_2.choices, None)
+        self.assertEqual(signal_2.comment, 'Signal comment!')
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = message_2.signals[2]
+        self.assertEqual(signal_3.name, 'Signal4')
+        self.assertEqual(signal_3.start, 30)
+        self.assertEqual(signal_3.length, 4)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'little_endian')
+        self.assertEqual(signal_3.is_signed, False)
+        self.assertEqual(signal_3.is_float, False)
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 0)
+        self.assertEqual(signal_3.minimum, 0)
+        self.assertEqual(signal_3.maximum, 3)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, 0)
+        self.assertEqual(signal_3.decimal.maximum, 3)
+        self.assertEqual(signal_3.unit, None)
+        self.assertEqual(signal_3.choices, {'one': 1, 'two': 2})
+        self.assertEqual(signal_3.comment, None)
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+        message_3 = db.messages[2]
+        self.assertEqual(message_3.frame_id, 100)
+        self.assertEqual(message_3.is_extended_frame, False)
+        self.assertEqual(message_3.name, 'Message3')
+        self.assertEqual(message_3.length, 8)
+        self.assertEqual(message_3.senders, [])
+        self.assertEqual(message_3.send_type, None)
+        self.assertEqual(message_3.cycle_time, None)
+        self.assertEqual(len(message_3.signals), 0)
+        self.assertEqual(message_3.comment, None)
+        self.assertEqual(message_3.bus_name, None)
+
+    def test_system_missing_factor_arxml(self):
+        with self.assertRaises(UnsupportedDatabaseFormatError) as cm:
+            cantools.db.load_file(
+                'tests/files/arxml/system-missing-factor-4.2.arxml')
+
+        self.assertEqual(
+            str(cm.exception),
+            'ARXML: "Expected 2 numerator values for linear scaling, but got 1."')
+
+    def test_system_missing_denominator_arxml(self):
+        with self.assertRaises(UnsupportedDatabaseFormatError) as cm:
+            cantools.db.load_file(
+                'tests/files/arxml/system-missing-denominator-4.2.arxml')
+
+        self.assertEqual(
+            str(cm.exception),
+            'ARXML: "Expected 1 denominator value for linear scaling, but got 0."')
+
+    def test_system_missing_rational_arxml(self):
+        db = cantools.db.load_file(
+            'tests/files/arxml/system-missing-rational-4.2.arxml')
+
+        signal_1 = db.messages[0].signals[0]
+        self.assertEqual(signal_1.scale, 1.0)
+        self.assertEqual(signal_1.offset, 0.0)
+        self.assertEqual(signal_1.minimum, 0.0)
+        self.assertEqual(signal_1.maximum, 4.0)
+        self.assertEqual(signal_1.decimal.scale, 1.0)
+        self.assertEqual(signal_1.decimal.offset, 0.0)
+        self.assertEqual(signal_1.decimal.minimum, 0.0)
+        self.assertEqual(signal_1.decimal.maximum, 4.0)
+
+    def test_system_bad_root_tag(self):
+        with self.assertRaises(UnsupportedDatabaseFormatError) as cm:
+            cantools.db.load_file(
+                'tests/files/arxml/system-bad-root-tag-4.2.arxml')
+
+        self.assertEqual(
+            str(cm.exception),
+            'ARXML: "Expected root element tag {http://autosar.org/schema/r4.0}'
+            'AUTOSAR, but got {http://autosar.org/schema/r4.0}NOT-AUTOSAR."')
+
+    def test_ecu_extract_arxml(self):
+        db = cantools.database.Database()
+        db.add_arxml_file('tests/files/arxml/ecu-extract-4.2.arxml')
+
+        self.assertEqual(len(db.nodes), 0)
+
+        self.assertEqual(len(db.messages), 3)
+
+        message_1 = db.messages[0]
+        self.assertEqual(message_1.frame_id, 5)
+        self.assertEqual(message_1.is_extended_frame, False)
+        self.assertEqual(message_1.name, 'Message1')
+        self.assertEqual(message_1.length, 6)
+        self.assertEqual(message_1.senders, [])
+        self.assertEqual(message_1.send_type, None)
+        self.assertEqual(message_1.cycle_time, None)
+        self.assertEqual(len(message_1.signals), 2)
+        self.assertEqual(message_1.comment, None)  # ToDo: 'Comment1'
+        self.assertEqual(message_1.bus_name, None)
+
+        signal_1 = message_1.signals[0]
+        self.assertEqual(signal_1.name, 'Signal1')
+        self.assertEqual(signal_1.start, 4)
+        self.assertEqual(signal_1.length, 3)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'big_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        # Signal scale, offset, minimum and maximum are not part of an
+        # ECU extract it seems.
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0.0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, None)
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = message_1.signals[1]
+        self.assertEqual(signal_2.name, 'Signal5')
+        self.assertEqual(signal_2.start, 16)
+        self.assertEqual(signal_2.length, 32)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'little_endian')
+        self.assertEqual(signal_2.is_signed, False)
+        self.assertEqual(signal_2.is_float, True)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, 0)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 0)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, None)
+        self.assertEqual(signal_2.choices, None)
+        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        message_2 = db.messages[1]
+        self.assertEqual(message_2.frame_id, 6)
+        self.assertEqual(message_2.is_extended_frame, True)
+        self.assertEqual(message_2.name, 'Message2')
+        self.assertEqual(message_2.length, 7)
+        self.assertEqual(message_2.senders, [])
+        self.assertEqual(message_2.send_type, None)
+        self.assertEqual(message_2.cycle_time, None)
+        self.assertEqual(len(message_2.signals), 3)
+        self.assertEqual(message_2.comment, None)
+        self.assertEqual(message_2.bus_name, None)
+
+        signal_1 = message_2.signals[0]
+        self.assertEqual(signal_1.name, 'Signal3')
+        self.assertEqual(signal_1.start, 6)
+        self.assertEqual(signal_1.length, 2)
+        self.assertEqual(signal_1.receivers, [])
+        self.assertEqual(signal_1.byte_order, 'little_endian')
+        self.assertEqual(signal_1.is_signed, False)
+        self.assertEqual(signal_1.is_float, False)
+        self.assertEqual(signal_1.scale, 1)
+        self.assertEqual(signal_1.offset, 0)
+        self.assertEqual(signal_1.minimum, None)
+        self.assertEqual(signal_1.maximum, None)
+        self.assertEqual(signal_1.decimal.scale, 1)
+        self.assertEqual(signal_1.decimal.offset, 0)
+        self.assertEqual(signal_1.decimal.minimum, None)
+        self.assertEqual(signal_1.decimal.maximum, None)
+        self.assertEqual(signal_1.unit, None)
+        self.assertEqual(signal_1.choices, None)
+        self.assertEqual(signal_1.comment, None)
+        self.assertEqual(signal_1.is_multiplexer, False)
+        self.assertEqual(signal_1.multiplexer_ids, None)
+
+        signal_2 = message_2.signals[1]
+        self.assertEqual(signal_2.name, 'Signal2')
+        self.assertEqual(signal_2.start, 18)
+        self.assertEqual(signal_2.length, 11)
+        self.assertEqual(signal_2.receivers, [])
+        self.assertEqual(signal_2.byte_order, 'little_endian')
+        self.assertEqual(signal_2.is_signed, True)
+        self.assertEqual(signal_2.is_float, False)
+        self.assertEqual(signal_2.scale, 1)
+        self.assertEqual(signal_2.offset, 0)
+        self.assertEqual(signal_2.minimum, None)
+        self.assertEqual(signal_2.maximum, None)
+        self.assertEqual(signal_2.decimal.scale, 1)
+        self.assertEqual(signal_2.decimal.offset, 0)
+        self.assertEqual(signal_2.decimal.minimum, None)
+        self.assertEqual(signal_2.decimal.maximum, None)
+        self.assertEqual(signal_2.unit, None)
+        self.assertEqual(signal_2.choices, None)
+        # Signal comment is not part of an ECU extract it seems.
+        self.assertEqual(signal_2.comment, None)
+        self.assertEqual(signal_2.is_multiplexer, False)
+        self.assertEqual(signal_2.multiplexer_ids, None)
+
+        signal_3 = message_2.signals[2]
+        self.assertEqual(signal_3.name, 'Signal4')
+        self.assertEqual(signal_3.start, 30)
+        self.assertEqual(signal_3.length, 4)
+        self.assertEqual(signal_3.receivers, [])
+        self.assertEqual(signal_3.byte_order, 'little_endian')
+        self.assertEqual(signal_3.is_signed, False)
+        self.assertEqual(signal_3.is_float, False)
+        # Signal scale, offset, minimum, maximum and choices are not
+        # part of an ECU extract it seems.
+        self.assertEqual(signal_3.scale, 1)
+        self.assertEqual(signal_3.offset, 0)
+        self.assertEqual(signal_3.minimum, None)
+        self.assertEqual(signal_3.maximum, None)
+        self.assertEqual(signal_3.decimal.scale, 1)
+        self.assertEqual(signal_3.decimal.offset, 0)
+        self.assertEqual(signal_3.decimal.minimum, None)
+        self.assertEqual(signal_3.decimal.maximum, None)
+        self.assertEqual(signal_3.unit, None)
+        self.assertEqual(signal_3.choices, None)
+        self.assertEqual(signal_3.comment, None)
+        self.assertEqual(signal_3.is_multiplexer, False)
+        self.assertEqual(signal_3.multiplexer_ids, None)
+
+        message_3 = db.messages[2]
+        self.assertEqual(message_3.frame_id, 100)
+        self.assertEqual(message_3.is_extended_frame, False)
+        self.assertEqual(message_3.name, 'Message3')
+        self.assertEqual(message_3.length, 8)
+        self.assertEqual(message_3.senders, [])
+        self.assertEqual(message_3.send_type, None)
+        self.assertEqual(message_3.cycle_time, None)
+        self.assertEqual(len(message_3.signals), 0)
+        self.assertEqual(message_3.comment, None)
+        self.assertEqual(message_3.bus_name, None)
+
+    def test_encode_decode_dlc_zero(self):
+        db = cantools.database.load_file('tests/files/dbc/message-dlc-zero.dbc')
+
+        self.assertEqual(db.encode_message('Message1', {}), b'')
+        self.assertEqual(db.decode_message('Message1', b''), {})
+
+    def test_issue_138(self):
+        """Test issue 138.
+
+        """
+
+        filename = 'tests/files/sym/issue_138.sym'
+
+        with self.assertRaises(cantools.database.errors.Error) as cm:
+            cantools.database.load_file(filename)
+
+        self.assertEqual(
+            str(cm.exception),
+            'The signal M length 0 is not greater than 0 in message Status.')
+
+    def test_multiple_senders(self):
+        filename = 'tests/files/dbc/multiple_senders.dbc'
+        db = cantools.database.load_file(filename)
+        message = db.get_message_by_frame_id(1)
+        self.assertEqual(message.senders, ['FOO', 'BAR', 'FIE'])
+        self.assert_dbc_dump(db, filename)
+
+    def test_issue_168_upper_case_file_extension(self):
+        filename = 'tests/files/dbc/issue_168.DBC'
+        db = cantools.db.load_file(filename)
+
+        message = db.get_message_by_name('Foo')
+        self.assertEqual(message.name, 'Foo')
+
+    def test_issue_163_dbc_newlines(self):
+        filename_in = 'tests/files/dbc/issue_163_newline.dbc'
+        filename_dump = 'issue_163_newline_dump.dbc'
+
+        db = cantools.database.load_file(filename_in)
+        cantools.database.dump_file(db, filename_dump)
+
+        with open(filename_dump, 'rb') as fin:
+            dumped_content = fin.read()
+
+        self.assertIn(b'\r\n', dumped_content)
+        self.assertFalse(re.search(br'\r[^\n]', dumped_content))
+        self.assertFalse(re.search(br'[^\r]\n', dumped_content))
+        os.remove(filename_dump)
+
+    def test_issue_167_long_names_from_scratch(self):
+        """Test dbc export with mixed short and long symbol names. Create the
+        database by code, i.e. start with an empty database object, add
+        nodes, messages and signals, dump that to dbc format. Reload
+        the dumped data and check that it matches the original data.
+
+        """
+
+        can = cantools.database.can
+        db = cantools.database.Database(
+            messages=[
+                can.message.Message(
+                    frame_id=1,
+                    name='MSG456789_123456789_123456789_ABC',
+                    length=8,
+                    signals=[
+                        can.signal.Signal(name='SIG456789_123456789_123456789_ABC',
+                                          start=9,
+                                          length=8)
+                    ],
+                    senders=['NODE56789_abcdefghi_ABCDEFGHI_XYZ']),
+                can.message.Message(
+                    frame_id=2,
+                    name='MSG_short',
+                    length=8,
+                    signals=[
+                        can.signal.Signal(name='SIG_short', start=1, length=8)
+                    ],
+                    senders=['NODE_short'])
+            ],
+            nodes=[
+                can.node.Node('NODE_short', None),
+                can.node.Node('NODE56789_abcdefghi_ABCDEFGHI_XYZ', None)
+            ],
+            version='')
+
+        db.refresh()
+        db = cantools.database.load_string(db.as_dbc_string())
+
+        self.assertEqual(len(db.nodes), 2)
+        self.assertEqual(db.nodes[0].name, 'NODE_short')
+        self.assertEqual(db.nodes[1].name, 'NODE56789_abcdefghi_ABCDEFGHI_XYZ')
+
+        self.assertEqual(len(db.messages), 2)
+
+        message = db.messages[0]
+        self.assertEqual(message.name, 'MSG456789_123456789_123456789_ABC')
+        self.assertEqual(message.senders, ['NODE56789_abcdefghi_ABCDEFGHI_XYZ'])
+        self.assertEqual(message.signals[0].name, 'SIG456789_123456789_123456789_ABC')
+
+        message = db.messages[1]
+        self.assertEqual(message.name, 'MSG_short')
+        self.assertEqual(message.senders, ['NODE_short'])
+        self.assertEqual(message.signals[0].name, 'SIG_short')
+
+    def test_long_names_multiple_relations(self):
+        """Test if long names are resolved correctly.
+
+        """
+
+        filename = 'tests/files/dbc/long_names_multiple_relations.dbc'
+        filename_dumped = 'tests/files/dbc/long_names_multiple_relations_dumped.dbc'
+        db = cantools.database.load_file(filename)
+        self.assert_dbc_dump(db, filename_dumped)
+
+    def test_database_version(self):
+        # default value if db created from scratch (map None to ''):
+        db = cantools.database.Database()
+        self.assertIsNone(db.version)
+        self.assertTrue(db.as_dbc_string().startswith('VERSION ""'))
+
+        # write access to version attribute
+        my_version = "my_version"
+        db.version = my_version
+        self.assertTrue(db.as_dbc_string().startswith('VERSION "{}"'.
+                        format(my_version)))
+
+    def test_dbc_modify_names(self):
+        """Test that modified object names are dumped correctly to dbc.
+        (Names with original length >32 and new length <= 32 chars)
+
+        """
+
+        filename_src = 'tests/files/dbc/mod_name_len_src.dbc'
+        filename_dest = 'tests/files/dbc/mod_name_len_dest.dbc'
+        db = cantools.database.load_file(filename_src)
+
+        # Now change the names (to <= 32 chars), dump and readback again:
+        db.messages[0].name = 'msg_now_short'
+        db.messages[0].signals[0].name = 'sig_now_short'
+        db.messages[0].senders[0] = 'node_now_short'
+        db.nodes[0].name = 'node_now_short'
+        db.refresh()
+
+        self.assert_dbc_dump(db, filename_dest)
+
+    def test_dbc_with_signal_groups(self):
+        """Test that signal groups can be loaded and dumped.
+
+        """
+
+        # Read and dump.
+        filename = 'tests/files/dbc/sig_groups.dbc'
+        db = cantools.database.load_file(filename)
+
+        message = db.get_message_by_name('SGMsg_m')
+        self.assertEqual(len(message.signal_groups), 2)
+
+        signal_group = message.signal_groups[0]
+        self.assertEqual(signal_group.name, 'Sub2')
+        self.assertEqual(signal_group.repetitions, 1)
+        self.assertEqual(signal_group.signal_names, ['dupsig', 'subSig2_1'])
+
+        signal_group = message.signal_groups[1]
+        self.assertEqual(signal_group.name, 'sub1')
+        self.assertEqual(signal_group.repetitions, 1)
+        self.assertEqual(signal_group.signal_names,
+                         ['dupsig', 'subSig1_2', 'subSig1_1'])
+
+        self.assert_dbc_dump(db, filename)
+
+        # Delete all signal groups.
+        for message in db.messages:
+            message.signal_groups = None
+
+        filename = 'tests/files/dbc/sig_groups_del.dbc'
+        self.assert_dbc_dump(db, filename)
+
+        # Add one signal group to each message with all its signals.
+        for message in db.messages[:-1]:
+            message.signal_groups = [
+                cantools.database.can.signal_group.SignalGroup(
+                    message.name,
+                    signal_names=[signal.name for signal in message.signals])
+            ]
+
+        # Create the last signal group with default values and update
+        # it by changing its attributes.
+        message = db.messages[-1]
+        signal_group = cantools.database.can.signal_group.SignalGroup(
+            'New_Signal_Group')
+        signal_group.name = message.name
+        signal_group.repetitions = 1
+        signal_group.signal_names = [signal.name for signal in message.signals]
+        message.signal_groups = [signal_group]
+
+        filename = 'tests/files/dbc/sig_groups_out.dbc'
+        self.assert_dbc_dump(db, filename)
+
+    def test_dbc_issue_199_more_than_11_bits_standard_frame_id(self):
+        filename = 'tests/files/dbc/issue_199.dbc'
+
+        with self.assertRaises(cantools.database.errors.Error) as cm:
+            cantools.database.load_file(filename)
+
+        self.assertEqual(
+            str(cm.exception),
+            'Standard frame id 0x10630000 is more than 11 bits in message '
+            'DriverDoorStatus.')
+
+    def test_dbc_issue_199_more_than_29_bits_extended_frame_id(self):
+        filename = 'tests/files/dbc/issue_199_extended.dbc'
+
+        with self.assertRaises(cantools.database.errors.Error) as cm:
+            cantools.database.load_file(filename)
+
+        self.assertEqual(
+            str(cm.exception),
+            'Extended frame id 0x7fffffff is more than 29 bits in message '
+            'DriverDoorStatus.')
+
+    def test_issue_207_tolerate_plus_in_dbc_sig_def(self):
+        db = cantools.database.load_file('tests/files/dbc/issue_207_sig_plus.dbc')
+        message = db.messages[0]
+
+        for signal in message.signals:
+            self.assertEqual(signal.minimum, -128)
+            self.assertEqual(signal.maximum, 127)
+
+    def test_issue_184_multiple_mux_values(self):
+        db = cantools.database.load_file(
+            'tests/files/dbc/issue_184_extended_mux_multiple_values.dbc')
+
+        self.assertEqual(db.messages[0].signal_tree,
+                         [
+                             {
+                                 'MUX': {
+                                     0: ['muxed_0_3_4_5'],
+                                     1: ['muxed_1'],
+                                     2: ['muxed_2'],
+                                     3: ['muxed_0_3_4_5'],
+                                     4: ['muxed_0_3_4_5'],
+                                     5: ['muxed_0_3_4_5']
+                                 }
+                             }
+                         ])
+
+        self.assert_dbc_dump(
+            db,
+            'tests/files/dbc/issue_184_extended_mux_multiple_values_dumped.dbc')
+
+    def test_issue_184_independent_multiplexors(self):
+        db = cantools.database.load_file(
+            'tests/files/dbc/issue_184_extended_mux_independent_multiplexors.dbc')
+
+        self.assertEqual(db.messages[0].signal_tree,
+                         [
+                             {
+                                 'MUX_A': {
+                                     0: ['muxed_A_0'],
+                                     1: ['muxed_A_1']
+                                 }
+                             },
+                             {
+                                 'MUX_B': {
+                                     1: ['muxed_B_1'],
+                                     2: ['muxed_B_2']
+                                 }
+                             }
+                         ])
+
+        self.assert_dbc_dump(
+            db,
+            'tests/files/dbc/issue_184_extended_mux_independent_multiplexors_dumped.dbc')
+
+    def test_issue_184_cascaded_multiplexors(self):
+        db = cantools.database.load_file(
+            'tests/files/dbc/issue_184_extended_mux_cascaded.dbc')
+
+        self.assertEqual(db.messages[0].signal_tree,
+                         [
+                             {
+                                 'MUX_A': {
+                                     1: ['muxed_A_1'],
+                                     2: [
+                                         {
+                                             'muxed_A_2_MUX_B': {
+                                                 0: ['muxed_B_0'],
+                                                 1: ['muxed_B_1']
+                                             }
+                                         }
+                                     ]
+                                 }
+                             }
+                         ])
+
+        self.assert_dbc_dump(
+            db,
+            'tests/files/dbc/issue_184_extended_mux_cascaded_dumped.dbc')
+
+    def test_floating_point_limits(self):
+        """Test correct handling of limits in `can.Message.encode` if they
+           are floating point.
+        """
+
+        dbc_content = """
+VERSION "1337"
+
+BS_:
+
+BU_: XYY XYZ
+
+BO_ 123 Message_1: 6 XYY
+  SG_ Alpha : 7|8@0+ (1,0) [0|255] "" XYZ
+  SG_ Bravo : 9|2@0+ (1,0) [0|3] "" XYZ
+  SG_ Charlie : 15|4@0+ (1,0) [0|14] "" XYZ
+  SG_ Delta : 23|8@0+ (0.394,0) [0.394|100.076] "" XYZ
+        """
+        db = cantools.database.load_string(dbc_content, 'dbc')
+        message = db.get_message_by_name('Message_1')
+        data_min = { signal.name: signal.decimal.minimum for signal in message.signals }
+        message.encode(data_min)
+        data_max = { signal.name: signal.decimal.maximum for signal in message.signals }
+        message.encode(data_max)
+
+        # outside of lower bound for Delta
+        with self.assertRaises(cantools.database.EncodeError):
+            message.encode({ **data_min, 'Delta': data_min['Delta']-Decimal('0.001') })
+        # outside of high bound for Delta
+        with self.assertRaises(cantools.database.EncodeError):
+            message.encode({ **data_max, 'Delta': data_max['Delta']+Decimal('0.001') })
 
 # This file is not '__main__' when executed via 'python setup.py3
 # test'.
