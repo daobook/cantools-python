@@ -74,9 +74,7 @@ class Monitor(can.Listener):
             time.sleep(0.05)
 
     def tick(self):
-        modified = self.update()
-
-        if modified:
+        if modified := self.update():
             self.redraw()
 
         self.process_user_input()
@@ -92,9 +90,7 @@ class Monitor(can.Listener):
         lines = []
 
         for name in self._filtered_sorted_message_names:
-            for line in self._formatted_messages[name]:
-                lines.append(line)
-
+            lines.extend(iter(self._formatted_messages[name]))
         # Only render the visible screen. We only have (self._nrows - 3)
         # available rows to draw on, due to the persistent TUI features that
         # are drawn:
@@ -104,12 +100,8 @@ class Monitor(can.Listener):
         # - line (n - 1): menu
         num_actual_usable_rows = self._nrows - 2 - 1
         page_row = self._page * num_actual_usable_rows
-        row = 2
-
-        for line in lines[page_row:page_row + num_actual_usable_rows]:
+        for row, line in enumerate(lines[page_row:page_row + num_actual_usable_rows], start=2):
             self.addstr(row, 0, line)
-            row += 1
-
         self.draw_menu(self._nrows - 1)
 
         # Refresh the screen.
@@ -128,7 +120,7 @@ class Monitor(can.Listener):
 
     def draw_menu(self, row):
         if self._show_filter:
-            text = 'Filter: ' + self._filter
+            text = f'Filter: {self._filter}'
         else:
             text = 'q: Quit, f: Filter, p: Play/Pause, r: Reset'
 
@@ -276,20 +268,16 @@ class Monitor(can.Listener):
         modified = False
 
         try:
+            modified = True
             while True:
                 self.try_update_message()
-                modified = True
         except queue.Empty:
             pass
 
         return modified
 
     def update(self):
-        if self._playing:
-            modified = self.update_messages()
-        else:
-            modified = False
-
+        modified = self.update_messages() if self._playing else False
         if self._modified:
             self._modified = False
             modified = True

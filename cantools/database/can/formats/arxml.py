@@ -155,16 +155,17 @@ class SystemLoader(object):
         self._sw_base_type_cache = {}
 
     def load(self):
-        buses = []
-        messages = []
         version = None
 
         can_frame_triggerings = self.root.iterfind(CAN_FRAME_TRIGGERINGS_XPATH,
                                                    NAMESPACES)
 
-        for can_frame_triggering in can_frame_triggerings:
-            messages.append(self.load_message(can_frame_triggering))
+        messages = [
+            self.load_message(can_frame_triggering)
+            for can_frame_triggering in can_frame_triggerings
+        ]
 
+        buses = []
         return InternalDatabase(messages,
                                 [],
                                 buses,
@@ -247,10 +248,7 @@ class SystemLoader(object):
     def load_message_comment(self, can_frame):
         l_2 = can_frame.find(DESC_L_2_XPATH, NAMESPACES)
 
-        if l_2 is not None:
-            return l_2.text
-        else:
-            return None
+        return l_2.text if l_2 is not None else None
 
     def load_signal(self, i_signal_to_i_pdu_mapping):
         """Load given signal and return a signal object.
@@ -353,10 +351,7 @@ class SystemLoader(object):
     def load_signal_comment(self, system_signal):
         l_2 = system_signal.find(DESC_L_2_XPATH, NAMESPACES)
 
-        if l_2 is not None:
-            return l_2.text
-        else:
-            return None
+        return l_2.text if l_2 is not None else None
 
     def load_minimum(self, minimum, decimal):
         if minimum is not None:
@@ -632,7 +627,7 @@ class EcuExtractLoader(object):
             raise ValueError(
                 'Expected 1 /Com, but got {}.'.format(len(com_xpaths)))
 
-        com_config = self.find_com_config(com_xpaths[0] + '/ComConfig')
+        com_config = self.find_com_config(f'{com_xpaths[0]}/ComConfig')
 
         for ecuc_container_value in com_config:
             definition_ref = ecuc_container_value.find(DEFINITION_REF_XPATH,
@@ -659,19 +654,23 @@ class EcuExtractLoader(object):
 
         # Name, frame id, length and is_extended_frame.
         name = com_i_pdu.find(SHORT_NAME_XPATH, NAMESPACES).text
-        direction = None
+        direction = next(
+            (
+                value
+                for parameter, value in self.iter_parameter_values(com_i_pdu)
+                if parameter == 'ComIPduDirection'
+            ),
+            None,
+        )
 
-        for parameter, value in self.iter_parameter_values(com_i_pdu):
-            if parameter == 'ComIPduDirection':
-                direction = value
-                break
-
-        com_pdu_id_ref = None
-
-        for reference, value in self.iter_reference_values(com_i_pdu):
-            if reference == 'ComPduIdRef':
-                com_pdu_id_ref = value
-                break
+        com_pdu_id_ref = next(
+            (
+                value
+                for reference, value in self.iter_reference_values(com_i_pdu)
+                if reference == 'ComPduIdRef'
+            ),
+            None,
+        )
 
         if com_pdu_id_ref is None:
             raise ValueError('No ComPduIdRef reference found.')
@@ -891,9 +890,8 @@ class EcuExtractLoader(object):
                 continue
 
             for reference, value in self.iter_reference_values(message):
-                if reference == expected_reference:
-                    if value == com_pdu_id_ref:
-                        return message
+                if reference == expected_reference and value == com_pdu_id_ref:
+                    return message
 
     def iter_parameter_values(self, param_conf_container):
         parameters = param_conf_container.find(PARAMETER_VALUES_XPATH,

@@ -33,9 +33,9 @@ class Database(object):
                  dbc_specifics=None,
                  frame_id_mask=None,
                  strict=True):
-        self._messages = messages if messages else []
-        self._nodes = nodes if nodes else []
-        self._buses = buses if buses else []
+        self._messages = messages or []
+        self._nodes = nodes or []
+        self._buses = buses or []
         self._name_to_message = {}
         self._frame_id_to_message = {}
         self._version = version
@@ -405,23 +405,16 @@ class Database(object):
             self._add_message(message)
 
     def __repr__(self):
-        lines = []
-
-        lines.append("version('{}')".format(self._version))
-        lines.append('')
+        lines = ["version('{}')".format(self._version), '']
 
         if self._nodes:
-            for node in self._nodes:
-                lines.append(repr(node))
-
+            lines.extend(repr(node) for node in self._nodes)
             lines.append('')
 
         for message in self._messages:
             lines.append(repr(message))
 
-            for signal in message.signals:
-                lines.append('  ' + repr(signal))
-
+            lines.extend(f'  {repr(signal)}' for signal in message.signals)
             lines.append('')
 
         return '\n'.join(lines)

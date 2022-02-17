@@ -224,7 +224,7 @@ class Parser60(textparser.Parser):
                          receive,
                          sendreceive)
 
-        grammar = Sequence(Optional('COMMENT'),
+        return Sequence(Optional('COMMENT'),
                            version,
                            ZeroOrMore(choice(unique_variables,
                                              float_decimal_places,
@@ -232,15 +232,16 @@ class Parser60(textparser.Parser):
                                              bit_rate_switch)),
                            ZeroOrMore(section))
 
-        return grammar
-
 
 def _get_section_tokens(tokens, name):
-    for section in tokens[3]:
-        if section[0] == name:
-            return [row for row in section[1] if isinstance(row, list)]
-
-    return []
+    return next(
+        (
+            [row for row in section[1] if isinstance(row, list)]
+            for section in tokens[3]
+            if section[0] == name
+        ),
+        [],
+    )
 
 
 def _load_comment(tokens):
@@ -348,11 +349,7 @@ def _load_signal_attributes(tokens, enum, enums, minimum, maximum, decimal):
 
 
 def _load_signal(tokens, enums):
-    # Default values.
     name = tokens[2]
-    byte_order = 'little_endian'
-    comment = None
-
     # Type and length.
     (is_signed,
      is_float,
@@ -364,14 +361,8 @@ def _load_signal(tokens, enums):
                                              tokens[4],
                                              enums)
 
-    # Byte order.
-    if tokens[6] == ['-m']:
-        byte_order = 'big_endian'
-
-    # Comment.
-    if tokens[8]:
-        comment = _load_comment(tokens[8][0])
-
+    byte_order = 'big_endian' if tokens[6] == ['-m'] else 'little_endian'
+    comment = _load_comment(tokens[8][0]) if tokens[8] else None
     # The rest.
     unit, factor, offset, enum, minimum, maximum, decimal = _load_signal_attributes(
         tokens[7],
@@ -444,12 +435,8 @@ def _load_message_variable(tokens,
                            enums,
                            multiplexer_signal,
                            multiplexer_ids):
-    # Default values.
     name = tokens[2]
-    byte_order = 'little_endian'
     start = int(tokens[4])
-    comment = None
-
     # Type and length.
     (is_signed,
      is_float,
@@ -461,14 +448,8 @@ def _load_message_variable(tokens,
                                              [tokens[6]],
                                              enums)
 
-    # Byte order.
-    if tokens[7] == ['-m']:
-        byte_order = 'big_endian'
-
-    # Comment.
-    if tokens[9]:
-        comment = _load_comment(tokens[9][0])
-
+    byte_order = 'big_endian' if tokens[7] == ['-m'] else 'little_endian'
+    comment = _load_comment(tokens[9][0]) if tokens[9] else None
     # The rest.
     unit, factor, offset, enum, minimum, maximum, decimal = _load_signal_attributes(
         tokens[8],

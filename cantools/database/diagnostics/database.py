@@ -21,7 +21,7 @@ class Database(object):
                  dids=None):
         self._name_to_did = {}
         self._identifier_to_did = {}
-        self._dids = dids if dids else []
+        self._dids = dids or []
         self.refresh()
 
     @property
@@ -118,9 +118,7 @@ class Database(object):
         for did in self._dids:
             lines.append(repr(did))
 
-            for data in did.datas:
-                lines.append('  ' + repr(data))
-
+            lines.extend(f'  {repr(data)}' for data in did.datas)
             lines.append('')
 
         return '\n'.join(lines)

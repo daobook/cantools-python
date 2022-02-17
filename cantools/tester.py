@@ -176,9 +176,10 @@ class Message(UserDict, object):
                     return
 
     def _filter_expected_message(self, message, signals):
-        if message.name == self.database.name:
-            if all([message.signals[name] == signals[name] for name in signals]):
-                return message.signals
+        if message.name == self.database.name and all(
+            message.signals[name] == signals[name] for name in signals
+        ):
+            return message.signals
 
     def send_periodic_start(self):
         if not self.enabled:
@@ -252,7 +253,7 @@ class Tester(object):
         # DUT name validation.
         node_names = [node.name for node in database.nodes]
 
-        if not any([name == dut_name for name in node_names]):
+        if not dut_name in node_names:
             raise Error(
                 "expected DUT name in {}, but got '{}'".format(node_names,
                                                                dut_name))
@@ -260,12 +261,12 @@ class Tester(object):
         # BUS name validation.
         bus_names = [bus.name for bus in database.buses]
 
-        if len(bus_names) == 0:
+        if not bus_names:
             if bus_name is not None:
                 raise Error(
                     "expected bus name None as there are no buses defined in "
                     "the database, but got '{}'".format(bus_name))
-        elif not any([name == bus_name for name in bus_names]):
+        elif not bus_name in bus_names:
             raise Error(
                 "expected bus name in {}, but got '{}'".format(bus_names,
                                                                bus_name))

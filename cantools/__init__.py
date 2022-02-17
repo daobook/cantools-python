@@ -50,4 +50,4 @@ def _main():
         try:
             args.func(args)
         except BaseException as e:
-            sys.exit('error: ' + str(e))
+            sys.exit(f'error: {str(e)}')

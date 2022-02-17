@@ -463,12 +463,7 @@ def _dump_version(database):
 
 
 def _dump_nodes(database):
-    bu = []
-
-    for node in database.nodes:
-        bu.append(node.name)
-
-    return bu
+    return [node.name for node in database.nodes]
 
 
 def _dump_value_tables(database):
@@ -505,10 +500,7 @@ def _dump_messages(database):
             return 'Vector__XXX'
 
     def format_senders(message):
-        if message.senders:
-            return message.senders[0]
-        else:
-            return 'Vector__XXX'
+        return message.senders[0] if message.senders else 'Vector__XXX'
 
     for message in database.messages:
         msg = []
@@ -543,27 +535,25 @@ def _dump_messages(database):
 
 
 def _dump_senders(database):
-    bo_tx_bu = []
-
-    for message in database.messages:
-        if len(message.senders) > 1:
-            bo_tx_bu.append(
-                'BO_TX_BU_ {frame_id} : {senders};'.format(
-                    frame_id=get_dbc_frame_id(message),
-                    senders=','.join(message.senders)))
-
-    return bo_tx_bu
+    return [
+        'BO_TX_BU_ {frame_id} : {senders};'.format(
+            frame_id=get_dbc_frame_id(message),
+            senders=','.join(message.senders),
+        )
+        for message in database.messages
+        if len(message.senders) > 1
+    ]
 
 
 def _dump_comments(database):
-    cm = []
+    cm = [
+        'CM_ BU_ {name} "{comment}";'.format(
+            name=node.name, comment=node.comment.replace('"', '\\"')
+        )
+        for node in database.nodes
+        if node.comment is not None
+    ]
 
-    for node in database.nodes:
-        if node.comment is not None:
-            cm.append(
-                'CM_ BU_ {name} "{comment}";'.format(
-                    name=node.name,
-                    comment=node.comment.replace('"', '\\"')))
 
     for message in database.messages:
         if message.comment is not None:
@@ -587,15 +577,15 @@ def _dump_signal_types(database):
     valtype = []
 
     for message in database.messages:
-        for signal in message.signals:
-            if not signal.is_float:
-                continue
-
-            valtype.append(
-                'SIG_VALTYPE_ {} {} : {};'.format(
-                    get_dbc_frame_id(message),
-                    signal.name,
-                    FLOAT_LENGTH_TO_SIGNAL_TYPE[signal.length]))
+        valtype.extend(
+            'SIG_VALTYPE_ {} {} : {};'.format(
+                get_dbc_frame_id(message),
+                signal.name,
+                FLOAT_LENGTH_TO_SIGNAL_TYPE[signal.length],
+            )
+            for signal in message.signals
+            if signal.is_float
+        )
 
     return valtype
 
@@ -609,11 +599,7 @@ def _dump_attribute_definitions(database):
     definitions = database.dbc.attribute_definitions
 
     def get_value(definition, value):
-        if definition.minimum is None:
-            value = ''
-        else:
-            value = ' {}'.format(value)
-
+        value = '' if definition.minimum is None else ' {}'.format(value)
         return value
 
     def get_minimum(definition):
@@ -623,7 +609,7 @@ def _dump_attribute_definitions(database):
         return get_value(definition, definition.maximum)
 
     def get_kind(definition):
-        return '' if definition.kind is None else definition.kind + ' '
+        return '' if definition.kind is None else f'{definition.kind} '
 
     for definition in definitions.values():
         if definition.type_name == 'ENUM':
@@ -678,12 +664,11 @@ def _dump_attributes(database):
     ba = []
 
     def get_value(attribute):
-        result = attribute.value
-
-        if attribute.definition.type_name == "STRING":
-            result = '"' + attribute.value + '"'
-
-        return result
+        return (
+            '"' + attribute.value + '"'
+            if attribute.definition.type_name == "STRING"
+            else attribute.value
+        )
 
     if database.dbc is not None:
         if database.dbc.attributes is not None:
@@ -733,17 +718,20 @@ def _dump_choices(database):
     val = []
 
     for message in database.messages:
-        for signal in message.signals[::-1]:
-            if signal.choices is None:
-                continue
-
-            val.append(
-                'VAL_ {frame_id} {name} {choices} ;'.format(
-                    frame_id=get_dbc_frame_id(message),
-                    name=signal.name,
-                    choices=' '.join(['{value} "{text}"'.format(value=value,
-                                                                text=text)
-                                      for value, text in signal.choices.items()])))
+        val.extend(
+            'VAL_ {frame_id} {name} {choices} ;'.format(
+                frame_id=get_dbc_frame_id(message),
+                name=signal.name,
+                choices=' '.join(
+                    [
+                        '{value} "{text}"'.format(value=value, text=text)
+                        for value, text in signal.choices.items()
+                    ]
+                ),
+            )
+            for signal in message.signals[::-1]
+            if signal.choices is not None
+        )
 
     return val
 
@@ -786,9 +774,8 @@ def _is_extended_mux_needed(messages):
             return True
 
         for signal in message.signals:
-            if signal.multiplexer_ids:
-                if len(signal.multiplexer_ids) > 1:
-                    return True
+            if signal.multiplexer_ids and len(signal.multiplexer_ids) > 1:
+                return True
 
     return False
 
@@ -1143,22 +1130,18 @@ def _load_signals(tokens,
             return None
 
     def get_is_multiplexer(signal):
-        if len(signal[1]) == 2:
-            return signal[1][1].endswith('M')
-        else:
-            return False
+        return signal[1][1].endswith('M') if len(signal[1]) == 2 else False
 
     def get_multiplexer_ids(signal, multiplexer_signal):
         ids = []
 
-        if multiplexer_signal is not None:
-            if len(signal) == 2 and not signal[1].endswith('M'):
-                value = signal[1][1:].rstrip('M')
-                ids.append(int(value))
-        else:
+        if multiplexer_signal is None:
             multiplexer_signal = get_multiplexer_signal(signal,
                                                         multiplexer_signal)
 
+        elif len(signal) == 2 and not signal[1].endswith('M'):
+            value = signal[1][1:].rstrip('M')
+            ids.append(int(value))
         try:
             ids.extend(
                 signal_multiplexer_values[multiplexer_signal][signal[0]])
@@ -1187,28 +1170,16 @@ def _load_signals(tokens,
         return [_get_node_name(attributes, receiver) for receiver in receivers]
 
     def get_minimum(minimum, maximum):
-        if minimum == maximum == '0':
-            return None
-        else:
-            return num(minimum)
+        return None if minimum == maximum == '0' else num(minimum)
 
     def get_maximum(minimum, maximum):
-        if minimum == maximum == '0':
-            return None
-        else:
-            return num(maximum)
+        return None if minimum == maximum == '0' else num(maximum)
 
     def get_minimum_decimal(minimum, maximum):
-        if minimum == maximum == '0':
-            return None
-        else:
-            return Decimal(minimum)
+        return None if minimum == maximum == '0' else Decimal(minimum)
 
     def get_maximum_decimal(minimum, maximum):
-        if minimum == maximum == '0':
-            return None
-        else:
-            return Decimal(maximum)
+        return None if minimum == maximum == '0' else Decimal(maximum)
 
     def get_is_float(frame_id_dbc, signal):
         """Get is_float for given signal.
@@ -1371,10 +1342,7 @@ def _load_messages(tokens,
             except (KeyError, TypeError):
                 frame_format = None
 
-        if frame_format == 'J1939PG':
-            return 'j1939'
-        else:
-            return None
+        return 'j1939' if frame_format == 'J1939PG' else None
 
     def get_message_name(frame_id_dbc, name):
         message_attributes = get_attributes(frame_id_dbc)

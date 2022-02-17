@@ -977,10 +977,10 @@ BATTERY_VT(
                 'tests/files/dbc/{}.dbc'.format(database)
             ]
 
-            database_h = basename + '.h'
-            database_c = basename + '.c'
-            fuzzer_c = basename + '_fuzzer.c'
-            fuzzer_mk = basename + '_fuzzer.mk'
+            database_h = f'{basename}.h'
+            database_c = f'{basename}.c'
+            fuzzer_c = f'{basename}_fuzzer.c'
+            fuzzer_mk = f'{basename}_fuzzer.mk'
 
             if os.path.exists(database_h):
                 os.remove(database_h)
@@ -998,10 +998,8 @@ BATTERY_VT(
                 cantools._main()
 
             if sys.version_info[0] > 2:
-                self.assert_files_equal(database_h,
-                                        'tests/files/c_source/' + database_h)
-                self.assert_files_equal(database_c,
-                                        'tests/files/c_source/' + database_c)
+                self.assert_files_equal(database_h, f'tests/files/c_source/{database_h}')
+                self.assert_files_equal(database_c, f'tests/files/c_source/{database_c}')
 
             self.assertFalse(os.path.exists(fuzzer_c))
             self.assertFalse(os.path.exists(fuzzer_mk))
@@ -1019,10 +1017,10 @@ BATTERY_VT(
                 'tests/files/dbc/{}.dbc'.format(database)
             ]
 
-            database_h = database + '.h'
-            database_c = database + '.c'
-            expected_database_h = database + '_no_floating_point_numbers.h'
-            expected_database_c = database + '_no_floating_point_numbers.c'
+            database_h = f'{database}.h'
+            database_c = f'{database}.c'
+            expected_database_h = f'{database}_no_floating_point_numbers.h'
+            expected_database_c = f'{database}_no_floating_point_numbers.c'
 
             if os.path.exists(database_h):
                 os.remove(database_h)
@@ -1035,11 +1033,12 @@ BATTERY_VT(
 
             if sys.version_info[0] > 2:
                 self.assert_files_equal(
-                    database_h,
-                    'tests/files/c_source/' + expected_database_h)
+                    database_h, f'tests/files/c_source/{expected_database_h}'
+                )
+
                 self.assert_files_equal(
-                    database_c,
-                    'tests/files/c_source/' + expected_database_c)
+                    database_c, f'tests/files/c_source/{expected_database_c}'
+                )
 
     def test_generate_c_source_database_name(self):
         databases = [
@@ -1067,10 +1066,8 @@ BATTERY_VT(
                 cantools._main()
 
             if sys.version_info[0] > 2:
-                self.assert_files_equal(database_h,
-                                        'tests/files/c_source/' + database_h)
-                self.assert_files_equal(database_c,
-                                        'tests/files/c_source/' + database_c)
+                self.assert_files_equal(database_h, f'tests/files/c_source/{database_h}')
+                self.assert_files_equal(database_c, f'tests/files/c_source/{database_c}')
 
     def test_generate_c_source_bit_fields(self):
         databases = [
@@ -1088,8 +1085,8 @@ BATTERY_VT(
                 'tests/files/dbc/{}.dbc'.format(database)
             ]
 
-            database_h = database + '_bit_fields.h'
-            database_c = database + '_bit_fields.c'
+            database_h = f'{database}_bit_fields.h'
+            database_c = f'{database}_bit_fields.c'
 
             if os.path.exists(database_h):
                 os.remove(database_h)
@@ -1101,10 +1098,8 @@ BATTERY_VT(
                 cantools._main()
 
             if sys.version_info[0] > 2:
-                self.assert_files_equal(database_h,
-                                        'tests/files/c_source/' + database_h)
-                self.assert_files_equal(database_c,
-                                        'tests/files/c_source/' + database_c)
+                self.assert_files_equal(database_h, f'tests/files/c_source/{database_h}')
+                self.assert_files_equal(database_c, f'tests/files/c_source/{database_c}')
 
     def test_generate_c_source_generate_fuzzer(self):
         argv = [
@@ -1135,14 +1130,10 @@ BATTERY_VT(
             cantools._main()
 
         if sys.version_info[0] > 2:
-            self.assert_files_equal(database_h,
-                                    'tests/files/c_source/' + database_h)
-            self.assert_files_equal(database_c,
-                                    'tests/files/c_source/' + database_c)
-            self.assert_files_equal(fuzzer_c,
-                                    'tests/files/c_source/' + fuzzer_c)
-            self.assert_files_equal(fuzzer_mk,
-                                    'tests/files/c_source/' + fuzzer_mk)
+            self.assert_files_equal(database_h, f'tests/files/c_source/{database_h}')
+            self.assert_files_equal(database_c, f'tests/files/c_source/{database_c}')
+            self.assert_files_equal(fuzzer_c, f'tests/files/c_source/{fuzzer_c}')
+            self.assert_files_equal(fuzzer_mk, f'tests/files/c_source/{fuzzer_mk}')
 
     def test_generate_c_source_sym(self):
         databases = [
@@ -1162,10 +1153,10 @@ BATTERY_VT(
                 'tests/files/sym/{}.sym'.format(database)
             ]
 
-            database_h = basename + '.h'
-            database_c = basename + '.c'
-            fuzzer_c = basename + '_fuzzer.c'
-            fuzzer_mk = basename + '_fuzzer.mk'
+            database_h = f'{basename}.h'
+            database_c = f'{basename}.c'
+            fuzzer_c = f'{basename}_fuzzer.c'
+            fuzzer_mk = f'{basename}_fuzzer.mk'
 
             if os.path.exists(database_h):
                 os.remove(database_h)
@@ -1183,10 +1174,8 @@ BATTERY_VT(
                 cantools._main()
 
             if sys.version_info[0] > 2:
-                self.assert_files_equal(database_h,
-                                        'tests/files/c_source/' + database_h)
-                self.assert_files_equal(database_c,
-                                        'tests/files/c_source/' + database_c)
+                self.assert_files_equal(database_h, f'tests/files/c_source/{database_h}')
+                self.assert_files_equal(database_c, f'tests/files/c_source/{database_c}')
 
             self.assertFalse(os.path.exists(fuzzer_c))
             self.assertFalse(os.path.exists(fuzzer_mk))

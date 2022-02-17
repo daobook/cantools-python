@@ -172,19 +172,18 @@ def load_file(filename,
         encoding,
         filename)
 
-    if cache_dir is None:
-        with fopen(filename, 'r', encoding=encoding) as fin:
-            return load(fin,
-                        database_format,
-                        frame_id_mask,
-                        strict)
-    else:
+    if cache_dir is not None:
         return _load_file_cache(filename,
                                 database_format,
                                 encoding,
                                 frame_id_mask,
                                 strict,
                                 cache_dir)
+    with fopen(filename, 'r', encoding=encoding) as fin:
+        return load(fin,
+                    database_format,
+                    frame_id_mask,
+                    strict)
 
 
 def dump_file(database,

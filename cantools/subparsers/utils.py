@@ -20,11 +20,13 @@ def _format_signals(message, decoded_signals):
         signal_name = signal.name
 
         formatted_signals.append(
-            '{}: {}{}'.format(signal_name,
-                               value,
-                              ''
-                              if signal.unit is None
-                              else ' ' + signal.unit))
+            '{}: {}{}'.format(
+                signal_name,
+                value,
+                '' if signal.unit is None else f' {signal.unit}',
+            )
+        )
+
 
     return formatted_signals
 
@@ -36,9 +38,9 @@ def _format_message_single_line(message, formatted_signals):
 
 def _format_message_multi_line(message, formatted_signals):
     indented_signals = [
-        '    ' + formatted_signal
-        for formatted_signal in formatted_signals
+        f'    {formatted_signal}' for formatted_signal in formatted_signals
     ]
+
 
     return MULTI_LINE_FMT.format(message=message.name,
                                  signals=',\n'.join(indented_signals))
@@ -61,7 +63,7 @@ def format_message(message, data, decode_choices, single_line):
     try:
         decoded_signals = message.decode(data, decode_choices)
     except Exception as e:
-        return ' ' + str(e)
+        return f' {str(e)}'
 
     formatted_signals = _format_signals(message, decoded_signals)
 

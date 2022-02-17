@@ -561,15 +561,12 @@ class Signal(object):
     @property
     def type_name(self):
         if self.is_float:
-            if self.length == 32:
-                type_name = 'float'
-            else:
-                type_name = 'double'
+            type_name = 'float' if self.length == 32 else 'double'
         else:
             type_name = 'int{}_t'.format(self.type_length)
 
             if not self.is_signed:
-                type_name = 'u' + type_name
+                type_name = f'u{type_name}'
 
         return type_name
 
@@ -722,12 +719,11 @@ class Signal(object):
                     shift_direction = 'left'
                 else:
                     shift_direction = 'right'
+            elif shift < 0:
+                shift = -shift
+                shift_direction = 'right'
             else:
-                if shift < 0:
-                    shift = -shift
-                    shift_direction = 'right'
-                else:
-                    shift_direction = 'left'
+                shift_direction = 'left'
 
             yield index, shift, shift_direction, mask
 
@@ -790,24 +786,23 @@ def _get(value, default):
 
 def _format_comment(comment):
     if comment:
-        return '\n'.join([
-            '     * ' + line.rstrip()
-            for line in comment.splitlines()
-        ]) + '\n     *\n'
+        return (
+            '\n'.join(
+                [f'     * {line.rstrip()}' for line in comment.splitlines()]
+            )
+            + '\n     *\n'
+        )
+
     else:
         return ''
 
 
 def _format_decimal(value, is_float=False):
-    if int(value) == value:
-        value = int(value)
-
-        if is_float:
-            return str(value) + '.0'
-        else:
-            return str(value)
-    else:
+    if int(value) != value:
         return str(value)
+    value = int(value)
+
+    return f'{value}.0' if is_float else str(value)
 
 
 def _format_range(signal):
@@ -848,15 +843,13 @@ def _generate_signal(signal, bit_fields):
     else:
         length = ' : {}'.format(signal.length)
 
-    member = SIGNAL_MEMBER_FMT.format(comment=comment,
+    return SIGNAL_MEMBER_FMT.format(comment=comment,
                                       range=range_,
                                       scale=scale,
                                       offset=offset,
                                       type_name=signal.type_name,
                                       name=signal.snake_name,
                                       length=length)
-
-    return member
 
 
 def _format_pack_code_mux(message,
@@ -897,7 +890,7 @@ def _format_pack_code_mux(message,
         '    break;',
         '}'])
 
-    return [('    ' + line).rstrip() for line in lines]
+    return [f'    {line}'.rstrip() for line in lines]
 
 
 def _format_pack_code_signal(message,
@@ -964,7 +957,7 @@ def _format_pack_code_level(message,
                                      variable_lines,
                                      helper_kinds)
 
-    body_lines = body_lines + muxes_lines
+    body_lines += muxes_lines
 
     if body_lines:
         body_lines = [''] + body_lines + ['']
@@ -1019,7 +1012,7 @@ def _format_unpack_code_mux(message,
         '    break;',
         '}'])
 
-    return [('    ' + line).rstrip() for line in lines]
+    return [f'    {line}'.rstrip() for line in lines]
 
 
 def _format_unpack_code_signal(message,
@@ -1102,14 +1095,13 @@ def _format_unpack_code_level(message,
                                        variable_lines,
                                        helper_kinds)
 
-    if body_lines:
-        if body_lines[-1] != '':
-            body_lines.append('')
+    if body_lines and body_lines[-1] != '':
+        body_lines.append('')
 
     if muxes_lines:
         muxes_lines.append('')
 
-    body_lines = body_lines + muxes_lines
+    body_lines += muxes_lines
 
     if body_lines:
         body_lines = [''] + body_lines
@@ -1131,10 +1123,7 @@ def _format_unpack_code(message, helper_kinds):
 
 
 def _generate_struct(message, bit_fields):
-    members = []
-
-    for signal in message.signals:
-        members.append(_generate_signal(signal, bit_fields))
+    members = [_generate_signal(signal, bit_fields) for signal in message.signals]
 
     if not members:
         members = [
@@ -1216,13 +1205,19 @@ def _generate_is_in_range(message):
         if maximum is not None:
             maximum = (maximum / scale - offset)
 
-        if minimum is None and signal.minimum_value is not None:
-            if signal.minimum_value > signal.minimum_type_value:
-                minimum = signal.minimum_value
+        if (
+            minimum is None
+            and signal.minimum_value is not None
+            and signal.minimum_value > signal.minimum_type_value
+        ):
+            minimum = signal.minimum_value
 
-        if maximum is None and signal.maximum_value is not None:
-            if signal.maximum_value < signal.maximum_type_value:
-                maximum = signal.maximum_value
+        if (
+            maximum is None
+            and signal.maximum_value is not None
+            and signal.maximum_value < signal.maximum_type_value
+        ):
+            maximum = signal.maximum_value
 
         suffix = signal.type_suffix
         check = []
@@ -1270,7 +1265,7 @@ def _generate_frame_id_defines(database_name, messages):
 
 
 def _generate_frame_length_defines(database_name, messages):
-    result = '\n'.join([
+    return '\n'.join([
         '#define {}_{}_LENGTH ({}u)'.format(
             database_name.upper(),
             message.snake_name.upper(),
@@ -1278,11 +1273,9 @@ def _generate_frame_length_defines(database_name, messages):
         for message in messages
     ])
 
-    return result
-
 
 def _generate_frame_cycle_time_defines(database_name, messages):
-    result = '\n'.join([
+    return '\n'.join([
         '#define {}_{}_CYCLE_TIME_MS ({}u)'.format(
             database_name.upper(),
             message.snake_name.upper(),
@@ -1290,19 +1283,15 @@ def _generate_frame_cycle_time_defines(database_name, messages):
         for message in messages if message.cycle_time is not None
     ])
 
-    return result
-
 
 def _generate_is_extended_frame_defines(database_name, messages):
-    result = '\n'.join([
+    return '\n'.join([
         '#define {}_{}_IS_EXTENDED ({})'.format(
             database_name.upper(),
             message.snake_name.upper(),
             int(message.is_extended_frame))
         for message in messages
     ])
-
-    return result
 
 
 def _generate_choices_defines(database_name, messages):
@@ -1387,11 +1376,7 @@ def _generate_definitions(database_name, messages, floating_point_numbers):
         for signal, (encode, decode), check in zip(message.signals,
                                                    _generate_encode_decode(message),
                                                    _generate_is_in_range(message)):
-            if check == 'true':
-                unused = '    (void)value;\n\n'
-            else:
-                unused = ''
-
+            unused = '    (void)value;\n\n' if check == 'true' else ''
             signal_definition = ''
 
             if floating_point_numbers:

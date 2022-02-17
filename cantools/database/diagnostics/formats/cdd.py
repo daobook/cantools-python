@@ -68,9 +68,6 @@ def _load_data_types(ecu_doc):
     types += ecu_doc.findall('DATATYPES/EOSITERDT')
 
     for data_type in types:
-        # Default values.
-        byte_order = 'big_endian'
-        unit = None
         factor = 1
         offset = 0
         bit_length = None
@@ -97,15 +94,11 @@ def _load_data_types(ecu_doc):
             else:
                 LOGGER.debug("Ignoring unsupported attribute '%s'.", key)
 
-        if ctype.attrib['bo'] == '21':
-            byte_order = 'little_endian'
-
+        byte_order = 'little_endian' if ctype.attrib['bo'] == '21' else 'big_endian'
         # Load from P-type element.
         ptype_unit = data_type.find('PVALUETYPE/UNIT')
 
-        if ptype_unit is not None:
-            unit = ptype_unit.text
-
+        unit = ptype_unit.text if ptype_unit is not None else None
         # Choices, scale and offset.
         choices = _load_choices(data_type)
 
@@ -161,11 +154,7 @@ def _load_did_element(did, data_types):
     data_objs += did.findall('SIMPLECOMPCONT/UNION/STRUCT/DATAOBJ')
 
     for data_obj in data_objs:
-        data = _load_data_element(data_obj,
-                                  offset,
-                                  data_types)
-
-        if data:
+        if data := _load_data_element(data_obj, offset, data_types):
             datas.append(data)
             offset += data.length
 

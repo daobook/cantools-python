@@ -142,11 +142,7 @@ def pgn_from_frame_id(frame_id):
 
     unpacked = frame_id_unpack(frame_id)
 
-    if unpacked.pdu_format < 240:
-        pdu_specific = 0
-    else:
-        pdu_specific = unpacked.pdu_specific
-
+    pdu_specific = 0 if unpacked.pdu_format < 240 else unpacked.pdu_specific
     return pgn_pack(unpacked.reserved,
                     unpacked.data_page,
                     unpacked.pdu_format,

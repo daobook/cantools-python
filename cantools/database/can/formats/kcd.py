@@ -62,7 +62,7 @@ def _load_signal_element(signal, nodes):
     notes = None
     receivers = []
     decimal = SignalDecimal(Decimal(slope), Decimal(intercept))
-    
+
     # Signal XML attributes.
     for key, value in signal.attrib.items():
         if key == 'name':
@@ -125,9 +125,10 @@ def _load_signal_element(signal, nodes):
     consumer = signal.find('ns:Consumer', NAMESPACES)
 
     if consumer is not None:
-        for receiver in consumer.iterfind('ns:NodeRef', NAMESPACES):
-            receivers.append(_get_node_name_by_id(nodes,
-                                                  receiver.attrib['id']))
+        receivers.extend(
+            _get_node_name_by_id(nodes, receiver.attrib['id'])
+            for receiver in consumer.iterfind('ns:NodeRef', NAMESPACES)
+        )
 
     return Signal(name=name,
                   start=_start_bit(offset, byte_order),
@@ -207,9 +208,10 @@ def _load_message_element(message, bus_name, nodes, strict):
     producer = message.find('ns:Producer', NAMESPACES)
 
     if producer is not None:
-        for sender in producer.iterfind('ns:NodeRef', NAMESPACES):
-            senders.append(_get_node_name_by_id(nodes,
-                                                sender.attrib['id']))
+        senders.extend(
+            _get_node_name_by_id(nodes, sender.attrib['id'])
+            for sender in producer.iterfind('ns:NodeRef', NAMESPACES)
+        )
 
     # Find all signals in this message.
     signals = []
@@ -217,8 +219,10 @@ def _load_message_element(message, bus_name, nodes, strict):
     for mux in message.iterfind('ns:Multiplex', NAMESPACES):
         signals += _load_multiplex_element(mux, nodes)
 
-    for signal in message.iterfind('ns:Signal', NAMESPACES):
-        signals.append(_load_signal_element(signal, nodes))
+    signals.extend(
+        _load_signal_element(signal, nodes)
+        for signal in message.iterfind('ns:Signal', NAMESPACES)
+    )
 
     if length == 'auto':
         if signals:
@@ -257,9 +261,8 @@ def _indent_xml(element, indent, level=0):
 
         if not element.tail or not element.tail.strip():
             element.tail = i
-    else:
-        if level and (not element.tail or not element.tail.strip()):
-            element.tail = i
+    elif level and (not element.tail or not element.tail.strip()):
+        element.tail = i
 
 
 def _dump_notes(parent, comment):
@@ -313,10 +316,7 @@ def _dump_signal(signal, node_refs, signal_element):
         value.set('unit', signal.unit)
 
     if signal.is_float:
-        if signal.length == 32:
-            type_name = 'single'
-        else:
-            type_name = 'double'
+        type_name = 'single' if signal.length == 32 else 'double'
     elif signal.is_signed:
         type_name = 'signed'
     else:
@@ -481,11 +481,10 @@ def load_string(string, strict=True):
         bus_baudrate = int(bus.get('baudrate', 500000))
         buses.append(Bus(bus_name, baudrate=bus_baudrate))
 
-        for message in bus.iterfind('ns:Message', NAMESPACES):
-            messages.append(_load_message_element(message,
-                                                  bus_name,
-                                                  nodes,
-                                                  strict))
+        messages.extend(
+            _load_message_element(message, bus_name, nodes, strict)
+            for message in bus.iterfind('ns:Message', NAMESPACES)
+        )
 
     return InternalDatabase(messages,
                             [

@@ -53,10 +53,9 @@ def _encode_field(field, data, scaling):
     elif scaling:
         if field.is_float:
             return (value - field.offset) / field.scale
-        else:
-            value = (Decimal(value) - Decimal(field.offset)) / Decimal(field.scale)
+        value = (Decimal(value) - Decimal(field.offset)) / Decimal(field.scale)
 
-            return int(value.to_integral())
+        return int(value.to_integral())
     else:
         return value
 
@@ -68,10 +67,7 @@ def _decode_field(field, value, decode_choices, scaling):
         except (KeyError, TypeError):
             pass
 
-    if scaling:
-        return (field.scale * value + field.offset)
-    else:
-        return value
+    return (field.scale * value + field.offset) if scaling else value
 
 
 def encode_data(data, fields, formats, scaling):

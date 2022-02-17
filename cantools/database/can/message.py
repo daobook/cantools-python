@@ -56,7 +56,7 @@ class Message(object):
         self._signals = signals
         self._signals.sort(key=start_bit)
         self._comment = comment
-        self._senders = senders if senders else []
+        self._senders = senders or []
         self._send_type = send_type
         self._cycle_time = cycle_time
         self._dbc = dbc_specifics
@@ -311,10 +311,7 @@ class Message(object):
         """
 
         def get_prefix(index, length):
-            if index < length - 1:
-                return '|   '
-            else:
-                return '    '
+            return '|   ' if index < length - 1 else '    '
 
         def add_prefix(prefix, lines):
             return [prefix + line for line in lines]
@@ -363,11 +360,11 @@ class Message(object):
 
         for signal in self._signals:
             if signal.choices:
-                lines.append('')
-                lines.append(signal.name)
-
-                for value, text in sorted(signal.choices.items()):
-                    lines.append('    {} {}'.format(value, text))
+                lines.extend(('', signal.name))
+                lines.extend(
+                    '    {} {}'.format(value, text)
+                    for value, text in sorted(signal.choices.items())
+                )
 
         return '\n'.join(lines)
 
@@ -450,7 +447,7 @@ class Message(object):
             signals = format_big() + format_little()
 
             if len(signals) > 0:
-                length = max([len(signal) for signal in signals])
+                length = max(len(signal) for signal in signals)
 
                 if length % 24 != 0:
                     length += (24 - (length % 24))
@@ -503,10 +500,10 @@ class Message(object):
                     elif byte_triple[0] in ' <>x':
                         line += '|'
                     elif byte_triple[0] == 'X':
-                        if prev_byte == 'X':
-                            line += 'X'
-                        elif prev_byte == '-':
+                        if prev_byte == '-':
                             line += '-'
+                        elif prev_byte == 'X':
+                            line += 'X'
                         else:
                             line += '|'
                     else:
@@ -521,10 +518,7 @@ class Message(object):
             # Add byte numbering.
             number_width = len(str(len(lines))) + 4
             number_fmt = '{{:{}d}} {{}}'.format(number_width - 1)
-            a = []
-
-            for number, line in enumerate(lines):
-                a.append(number_fmt.format(number, line))
+            a = [number_fmt.format(number, line) for number, line in enumerate(lines)]
 
             return a, len(lines), number_width
 
@@ -532,10 +526,10 @@ class Message(object):
             padding = number_width * ' '
 
             return [
-                padding + '               Bit',
-                padding + '',
-                padding + '  7   6   5   4   3   2   1   0',
-                padding + '+---+---+---+---+---+---+---+---+'
+                f'{padding}               Bit',
+                f'{padding}',
+                f'{padding}  7   6   5   4   3   2   1   0',
+                f'{padding}+---+---+---+---+---+---+---+---+',
             ] + lines
 
         def add_horizontal_lines(byte_lines, number_width):
@@ -543,9 +537,7 @@ class Message(object):
             lines = []
 
             for byte_line in byte_lines:
-                lines.append(byte_line)
-                lines.append(padding + '+---+---+---+---+---+---+---+---+')
-
+                lines.extend((byte_line, f'{padding}+---+---+---+---+---+---+---+---+'))
             return lines
 
         def name_bit(signal):
@@ -565,7 +557,7 @@ class Message(object):
 
             for signal in self._signals:
                 byte, bit = divmod(name_bit(signal), 8)
-                signals_per_byte[byte].append((bit, '+-- ' + signal.name))
+                signals_per_byte[byte].append((bit, f'+-- {signal.name}'))
 
             # Format signal lines.
             signal_lines_per_byte = []
@@ -577,7 +569,7 @@ class Message(object):
                 for signal in signals:
                     line = number_width * ' ' + '  ' + signal[1]
                     line = (7 - signal[0]) * '    ' + line
-                    chars = [char for char in line]
+                    chars = list(line)
 
                     for other_signal in signals:
                         if other_signal[0] > signal[0]:
@@ -600,8 +592,7 @@ class Message(object):
                     lines += signal_lines_per_byte[number]
 
                     if number + 1 < number_of_bytes:
-                        lines.append(
-                            padding + '+---+---+---+---+---+---+---+---+')
+                        lines.append(f'{padding}+---+---+---+---+---+---+---+---+')
 
             return lines
 
@@ -613,9 +604,7 @@ class Message(object):
 
             start_index = 4 + ((number_of_matrix_lines - 4) // 2 - 1)
 
-            if start_index < 4:
-                start_index = 4
-
+            start_index = max(start_index, 4)
             axis_lines = start_index * ['  ']
             axis_lines += [' B', ' y', ' t', ' e']
             axis_lines += (len(lines) - start_index - 4) * ['  ']
@@ -656,23 +645,27 @@ class Message(object):
             if isinstance(value, str):
                 continue
 
-            if signal.decimal.minimum is not None:
-                if value < signal.decimal.minimum:
-                    raise EncodeError(
-                        "Expected signal '{}' value greater than or equal to "
-                        "{} in message '{}', but got {}.".format(signal.name,
-                                                                 signal.decimal.minimum,
-                                                                 self._name,
-                                                                 value))
+            if (
+                signal.decimal.minimum is not None
+                and value < signal.decimal.minimum
+            ):
+                raise EncodeError(
+                    "Expected signal '{}' value greater than or equal to "
+                    "{} in message '{}', but got {}.".format(signal.name,
+                                                             signal.decimal.minimum,
+                                                             self._name,
+                                                             value))
 
-            if signal.decimal.maximum is not None:
-                if value > signal.decimal.maximum:
-                    raise EncodeError(
-                        "Expected signal '{}' value less than or equal to "
-                        "{} in message '{}', but got {}.".format(signal.name,
-                                                                 signal.decimal.maximum,
-                                                                 self.name,
-                                                                 value))
+            if (
+                signal.decimal.maximum is not None
+                and value > signal.decimal.maximum
+            ):
+                raise EncodeError(
+                    "Expected signal '{}' value less than or equal to "
+                    "{} in message '{}', but got {}.".format(signal.name,
+                                                             signal.decimal.maximum,
+                                                             self.name,
+                                                             value))
 
     def _check_signals(self, signals, data, scaling):
         for signal in signals:

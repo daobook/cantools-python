@@ -58,25 +58,40 @@ def _dump_can_database(dbase):
         print('  Senders:    {}'.format(format_and(message.senders)))
         print('  Layout:')
         print()
-        print('\n'.join([
-            ('    ' + line).rstrip()
-            for line in message.layout_string().splitlines()
-        ]))
+        print(
+            '\n'.join(
+                [
+                    f'    {line}'.rstrip()
+                    for line in message.layout_string().splitlines()
+                ]
+            )
+        )
+
         print()
         print('  Signal tree:')
         print()
-        print('\n'.join([
-            ('    ' + line).rstrip()
-            for line in message.signal_tree_string().splitlines()
-        ]))
+        print(
+            '\n'.join(
+                [
+                    f'    {line}'.rstrip()
+                    for line in message.signal_tree_string().splitlines()
+                ]
+            )
+        )
+
         print()
 
         if signal_choices_string:
             print('  Signal choices:')
-            print('\n'.join([
-                ('    ' + line).rstrip()
-                for line in signal_choices_string.splitlines()
-            ]))
+            print(
+                '\n'.join(
+                    [
+                        f'    {line}'.rstrip()
+                        for line in signal_choices_string.splitlines()
+                    ]
+                )
+            )
+
             print()
 
         print('  ' + 72 * '-')
